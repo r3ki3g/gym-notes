@@ -1,9 +1,12 @@
-import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError } from './firebase.js';
+import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
+         parseAccessKey, getDeviceOwner, saveDeviceOwner, KEY_DELIMITER } from './firebase.js';
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, MUSCLES } from './search.js';
 import { UNITS, formatLoad, formatReps, setVolumeKg, SUPPORT } from './units.js';
-import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel } from './ui.js';
+import { el, clear, toast, confirmSheet, confirmOnBehalf, promptSheet, segmented, field, dayLabel, timeAgo, stampMs } from './ui.js';
+import { chime, soundOn, setSound, notifOn, setNotif, primeAudio,
+         vibrateOn, setVibrate, vibrateSupported, buzzTest } from './notify.js';
 
 /* ============================ state ============================ */
 
@@ -12,10 +15,16 @@ const state = {
   exercises: [],
   sets: [],                 // every set for the active profile
   profileId: localStorage.getItem('gn.profile') || null,
+  owner: getDeviceOwner(),          // who is holding THIS phone
+  activity: [],                     // today's sets from everyone, for the feed
+  seenAlerts: Number(localStorage.getItem('gn.seenAlerts') || 0),
+
   loaded: { profiles: false, exercises: false, sets: false },
 };
 
 let unsubSets = () => {};
+let unsubActivity = () => {};
+let activityDate = null;
 
 // True once the user has touched the set form. A snapshot arriving from the
 // other person's phone must not rebuild the DOM and wipe half-typed input —
@@ -23,6 +32,11 @@ let unsubSets = () => {};
 let formDirty = false;
 const viewEl = () => document.getElementById('view');
 const activeProfile = () => state.profiles.find((p) => p.id === state.profileId) || null;
+/** True when the selected profile is not the person holding the phone. */
+const isOnBehalf = () => {
+  const p = activeProfile();
+  return !!(p && state.owner && p.name !== state.owner);
+};
 const exerciseById = (id) => state.exercises.find((e) => e.id === id);
 
 function setProfile(id) {
@@ -48,6 +62,10 @@ const go = (path) => { location.hash = '#/' + path; };
 
 window.addEventListener('hashchange', () => { formDirty = false; render(); });
 
+// "5s ago" has to keep counting. Only ticks while the Alerts tab is open, so it
+// costs nothing the rest of the time.
+setInterval(() => { if (route()[0] === 'alerts') render(); }, 15000);
+
 /**
  * Re-render triggered by a Firestore snapshot rather than by navigation.
  * Skipped while the set form holds unsaved input; the next explicit render
@@ -64,37 +82,81 @@ function paintTopbar() {
   const btn = document.getElementById('profile-switch');
   const p = activeProfile();
   btn.textContent = p ? p.name : 'Choose person';
-  btn.onclick = () => go('profiles');
+  btn.classList.toggle('other', isOnBehalf());
+  btn.onclick = () => go('settings');
 
   const tab = route()[0];
   for (const b of document.querySelectorAll('#tabs button')) {
     b.classList.toggle('active', b.dataset.route === tab);
     b.onclick = () => go(b.dataset.route);
+
+    if (b.dataset.route === 'alerts') {
+      b.querySelector('.tab-dot')?.remove();
+      // Presence, not a count — the number read as clutter on a 5-tab bar.
+      if (unreadAlerts().length) b.append(el('span', { class: 'tab-dot' }));
+    }
   }
 }
 
 function paintSync(online) {
   const s = document.getElementById('sync');
   s.className = 'sync ' + (online ? 'on' : 'off');
-  s.querySelector('.sync-label').textContent = online ? 'Synced' : 'Offline';
+  const label = online ? 'Synced' : 'Offline';
+  s.querySelector('.sync-label').textContent = label;
+  s.title = label;   // the text is hidden on narrow screens; the dot needs a name
 }
 window.addEventListener('online',  () => paintSync(true));
 window.addEventListener('offline', () => paintSync(false));
+
+/* ============================ boot splash ============================ */
+
+let splashDone = false;
+
+/** Progress text under the wordmark. No-op once the splash is gone. */
+function splashStage(text, failed = false) {
+  if (splashDone) return;
+  const n = document.getElementById('splash-stage');
+  if (!n) return;
+  n.textContent = text;
+  n.classList.toggle('failed', failed);
+}
+
+function hideSplash() {
+  if (splashDone) return;
+  splashDone = true;
+  clearTimeout(splashFailsafe);
+  document.getElementById('splash')?.classList.add('gone');
+}
+
+// Bad signal in the gym means a first-ever load can hang on auth. Never leave
+// someone staring at an animation with no explanation.
+const splashFailsafe = setTimeout(() => {
+  if (splashDone) return;
+  splashStage('still trying — check your connection', true);
+}, 12000);
 
 /* ============================ render ============================ */
 
 function render() {
   paintTopbar();
   formDirty = false;
+  if (state.loaded.profiles && state.owner) { startActivityWatch(); primeAudio(); }
   const v = clear(viewEl());
   const [tab, arg] = route();
 
   if (!state.loaded.profiles || !state.loaded.exercises) {
     return v.append(el('div', { class: 'empty' }, 'Loading…'));
   }
+  hideSplash();   // real content is on screen now
+
+  // Device identity is required before anything can be logged, so a set is
+  // never written without knowing who typed it.
+  if (!state.owner) return viewWhoAmI(v);
 
   switch (tab) {
-    case 'profiles':  return viewProfiles(v);
+    case 'alerts':    return viewAlerts(v);
+    case 'settings':
+    case 'profiles':  return viewSettings(v);
     case 'search':    return viewSearch(v);
     case 'set':       return viewLogSet(v, arg);
     case 'history':   return viewHistory(v);
@@ -103,10 +165,165 @@ function render() {
   }
 }
 
-/* ============================ people ============================ */
+/* ============================ activity nudge ============================ */
 
-function viewProfiles(v) {
-  v.append(el('h2', {}, 'Who are we logging for?'));
+/** Sets entered by the other person, newest first. */
+function alertItems() {
+  return state.activity
+    .filter((x) => x.enteredBy && x.enteredBy !== state.owner)
+    .sort((a, b) => (stampMs(b.createdAt) || 0) - (stampMs(a.createdAt) || 0));
+}
+
+const unreadAlerts = () => alertItems().filter((x) => (stampMs(x.createdAt) || Date.now()) > state.seenAlerts);
+
+function markAlertsSeen() {
+  state.seenAlerts = Date.now();
+  try { localStorage.setItem('gn.seenAlerts', String(state.seenAlerts)); } catch {}
+}
+
+/**
+ * Toast + chime when the OTHER person logs something. Pushed over the existing
+ * Firestore socket, so there is no polling and no extra read cost beyond the
+ * documents themselves.
+ */
+function startActivityWatch() {
+  const date = S.todayKey();
+  if (activityDate === date) return;
+  activityDate = date;
+  unsubActivity();
+
+  unsubActivity = S.watchActivity(date, ({ all, added }) => {
+    state.activity = all;
+
+    // Your own sets are not news, and pre-identity sets can't be attributed.
+    const theirs = added.filter((x) => x.enteredBy && x.enteredBy !== state.owner);
+    if (!theirs.length) return renderFromData();
+
+    if (notifOn()) {
+      const who = [...new Set(theirs.map((x) => x.enteredBy))];
+      let msg;
+      if (theirs.length === 1) {
+        const ex = exerciseById(theirs[0].exerciseId);
+        msg = `💪 ${who[0]} logged ${ex ? ex.name : 'a set'}`;
+      } else if (who.length === 1) {
+        msg = `💪 ${who[0]} logged ${theirs.length} sets`;
+      } else {
+        msg = `💪 ${theirs.length} new sets logged`;
+      }
+      toast(msg);
+      chime();        // self-limiting: at most one tone per 15s
+    }
+    renderFromData();
+  });
+}
+
+/* ============================ alerts feed ============================ */
+
+/**
+ * Derived from today's sets rather than stored as its own collection — an
+ * activity record would be a second write per set for information already
+ * sitting in the set itself.
+ */
+function viewAlerts(v) {
+  const items = alertItems();
+  const cutoff = state.seenAlerts;
+
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:12px' },
+    el('h2', { style: 'margin:0' }, 'Alerts'),
+    el('span', { class: 'tiny faint' }, 'today')
+  ));
+
+  if (!items.length) {
+    v.append(el('div', { class: 'empty' },
+      'Nothing from anyone else yet.', el('br'),
+      el('span', { class: 'tiny' }, 'Sets you enter yourself never appear here.')));
+    markAlertsSeen();
+    return;
+  }
+
+  const card = el('div', { class: 'card' });
+  for (const x of items) {
+    const ms = stampMs(x.createdAt);
+    const ex = exerciseById(x.exerciseId);
+    const forWhom = state.profiles.find((p) => p.id === x.profileId);
+
+    card.append(el('div', { class: 'feed-item' + (ms && ms > cutoff ? ' fresh' : '') },
+      el('div', { class: 'feed-icon' }, '💪'),
+      el('div', { class: 'grow' },
+        el('div', {},
+          el('strong', {}, x.enteredBy),
+          el('span', { class: 'muted' }, ' logged '),
+          el('strong', {}, ex ? ex.name : 'a set'),
+          forWhom ? el('span', { class: 'muted' }, ' for ' + forWhom.name) : null
+        ),
+        el('div', { class: 'tiny muted', style: 'margin-top:2px' },
+          formatLoad(x.weight, x.unit, x.perSide) + ' × ' + formatReps(x)),
+        x.comment ? el('div', { class: 'cmt' }, x.comment) : null
+      ),
+      el('span', { class: 'feed-when' }, timeAgo(ms))
+    ));
+  }
+  v.append(card);
+
+  // Opening the tab clears the badge; the next render shows no dot.
+  markAlertsSeen();
+}
+
+/* ============================ device identity ============================ */
+
+/**
+ * Fallback when the access key carried no "---Name" suffix. Asked once per
+ * device, then remembered.
+ */
+function viewWhoAmI(v) {
+  v.append(el('div', { style: 'text-align:center;margin:6vh 0 18px' },
+    el('div', { style: 'font-size:2.4rem' }, '👋'),
+    el('h2', { style: 'margin:12px 0 4px' }, 'Who is using this phone?'),
+    el('p', { class: 'muted tiny' }, 'Asked once. It labels every set you enter for someone else.')
+  ));
+
+  for (const p of state.profiles) {
+    v.append(el('button', {
+      class: 'btn block big', style: 'margin-bottom:10px',
+      onClick: () => { saveDeviceOwner(p.name); state.owner = p.name; render(); },
+    }, p.name));
+  }
+
+  v.append(el('button', { class: 'btn block', style: 'margin-top:14px', onClick: async () => {
+    const name = await promptSheet('Add person', '', 'Name');
+    if (!name) return;
+    await S.addProfile(name);
+    saveDeviceOwner(name);
+    state.owner = name;
+    toast(`${name} added`);
+  } }, '+ Someone else'));
+}
+
+/* ============================ settings ============================ */
+
+/** Reusable on/off row so every toggle reads and behaves identically. */
+function toggleRow(label, hint, isOn, onToggle) {
+  const btn = el('button', { class: 'btn sm', onClick: () => {
+    const next = !isOn();
+    onToggle(next);
+    btn.textContent = next ? 'On' : 'Off';
+    btn.classList.toggle('primary', next);
+  } }, isOn() ? 'On' : 'Off');
+  btn.classList.toggle('primary', isOn());
+
+  return el('div', { class: 'row spread card', style: 'background:var(--panel-2)' },
+    el('div', { class: 'grow' },
+      el('div', {}, label),
+      hint ? el('div', { class: 'tiny faint', style: 'margin-top:2px' }, hint) : null),
+    btn
+  );
+}
+
+function viewSettings(v) {
+  v.append(el('h2', {}, 'Settings'));
+
+  v.append(el('h3', {}, 'Who are we logging for?'));
+
 
   for (const p of state.profiles) {
     v.append(el('div', { class: 'card row spread' },
@@ -141,6 +358,53 @@ function viewProfiles(v) {
     go('log');
   } }, '+ Add person'));
 
+  // --- this device ---------------------------------------------------------
+  v.append(el('h3', {}, 'This device'));
+  v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2)' },
+    el('span', { class: 'tiny muted grow' }, 'This phone belongs to ',
+      el('strong', { style: 'color:var(--gold)' }, state.owner || '—')),
+    el('button', { class: 'btn sm', onClick: () => {
+      saveDeviceOwner(''); state.owner = null; render();
+    } }, 'Change')
+  ));
+
+  // --- alerts --------------------------------------------------------------
+  v.append(el('h3', {}, 'Alerts'));
+  v.append(toggleRow(
+    'Notifications',
+    'Pop-up toast when the other person logs a set',
+    notifOn,
+    (on) => { setNotif(on); }
+  ));
+  v.append(toggleRow(
+    'Sound',
+    'Play the tone with the toast',
+    soundOn,
+    (on) => { setSound(on); if (on) chime(); }   // also unlocks audio on iOS
+  ));
+
+  // Say plainly when the browser cannot do it, rather than offering a switch
+  // that silently does nothing.
+  if (vibrateSupported()) {
+    v.append(toggleRow(
+      'Vibrate',
+      'Buzz with the toast — only while the app is open',
+      vibrateOn,
+      (on) => { setVibrate(on); if (on) buzzTest(); }
+    ));
+  } else {
+    v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2);opacity:.6' },
+      el('div', { class: 'grow' },
+        el('div', {}, 'Vibrate'),
+        el('div', { class: 'tiny faint', style: 'margin-top:2px' },
+          'Not supported by this browser — iOS has never shipped it')),
+      el('span', { class: 'pill' }, 'N/A')
+    ));
+  }
+
+  v.append(el('div', { class: 'tiny faint', style: 'margin:-2px 0 4px' },
+    'The Alerts tab keeps filling either way — these only control the interruption.'));
+
   v.append(el('button', { class: 'btn block danger', style: 'margin-top:26px', onClick: async () => {
     const ok = await confirmSheet('Forget key on this device?',
       'You will need to paste it again next time. Use this before handing the phone to anyone.',
@@ -165,6 +429,8 @@ function groupIntoExercises(sets) {
 }
 
 function setLine(s, index, opts = {}) {
+  // Tag only when the typist differs from whose record it is.
+  const byOther = s.enteredBy && opts.ownerName && s.enteredBy !== opts.ownerName;
   const sup = SUPPORT[s.support] || SUPPORT.none;
   const load = el('span', { class: 'load' }, formatLoad(s.weight, s.unit, s.perSide));
 
@@ -173,7 +439,8 @@ function setLine(s, index, opts = {}) {
       load,
       el('span', { class: 'muted' }, 'for ' + formatReps(s)),
       s.support !== 'none' ? el('span', { class: 'tiny ' + sup.cls }, sup.label) : null,
-      s.warmup ? el('span', { class: 'pill warmup' }, 'warm-up') : null
+      s.warmup ? el('span', { class: 'pill warmup' }, 'warm-up') : null,
+      byOther ? el('span', { class: 'pill by' }, 'entered by ' + s.enteredBy) : null
     )
   );
 
@@ -195,7 +462,7 @@ function viewLog(v) {
   if (!p) {
     return v.append(el('div', { class: 'empty' },
       'No one selected.', el('br'),
-      el('button', { class: 'btn primary', style: 'margin-top:14px', onClick: () => go('profiles') }, 'Choose a person')));
+      el('button', { class: 'btn primary', style: 'margin-top:14px', onClick: () => go('settings') }, 'Choose a person')));
   }
 
   const today = S.todayKey();
@@ -205,6 +472,11 @@ function viewLog(v) {
     el('h2', { style: 'margin:0' }, `${p.name} · Today`),
     el('span', { class: 'tiny faint' }, `${todaySets.length} set${todaySets.length === 1 ? '' : 's'}`)
   ));
+
+  if (isOnBehalf()) {
+    v.append(el('div', { class: 'onbehalf' },
+      `⚠️ You are logging for ${p.name} — despite actually being ${state.owner}`));
+  }
 
   v.append(el('button', { class: 'btn primary block', style: 'margin-bottom:14px', onClick: () => go('search') },
     '+ Log a set'));
@@ -226,6 +498,7 @@ function viewLog(v) {
     for (const s of grp.sets) {
       if (!s.warmup) n++;
       card.append(setLine(s, n, {
+        ownerName: p.name,
         onDelete: async () => {
           if (await confirmSheet('Delete this set?', formatLoad(s.weight, s.unit, s.perSide) + ' for ' + formatReps(s))) {
             await S.deleteSet(s.id); toast('Set deleted');
@@ -258,7 +531,8 @@ function viewSearch(v) {
               el('span', { class: 'pill' + (i === 0 ? ' primary-muscle' : '') }, m))
           )
         ),
-        el('span', { class: 'tiny faint' }, (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/'))
+        el('span', { class: 'tiny faint' }, (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/')),
+        el('span', { class: 'go' }, '›')
       ));
     }
   };
@@ -339,6 +613,7 @@ function viewLogSet(v, exerciseId) {
     card.append(el('div', { class: 'tiny faint', style: 'margin-bottom:4px' }, 'Today so far'));
     let n = 0;
     todays.forEach((s) => { if (!s.warmup) n++; card.append(setLine(s, n, {
+      ownerName: p.name,
       onDelete: async () => { if (await confirmSheet('Delete this set?')) { await S.deleteSet(s.id); toast('Deleted'); } }
     })); });
     v.append(card);
@@ -448,6 +723,10 @@ function viewLogSet(v, exerciseId) {
     const reps = parseInt(repsInput.value);
     if (isNaN(weight) || isNaN(reps) || reps <= 0) return toast('Need a weight and reps');
 
+    // Every single time, by request: post-workout nobody reads carefully, and
+    // a set written to the wrong person is worse than one extra tap.
+    if (isOnBehalf() && !(await confirmOnBehalf(p.name, state.owner))) return;
+
     const payload = {
       ...draft,
       profileId: p.id,
@@ -457,6 +736,7 @@ function viewLogSet(v, exerciseId) {
       reps,
       halfReps: parseInt(halfInput.value) || 0,
       comment: commentBox.value.trim(),
+      enteredBy: state.owner || null,
       drops: draft.drops.filter((d) => d.reps > 0),
     };
     await S.addSet(payload);
@@ -514,7 +794,7 @@ function viewHistory(v) {
       detail.append(el('div', { style: 'margin-top:10px' },
         el('div', { class: 'tiny muted' }, exerciseById(grp.exerciseId)?.name || '(deleted)')));
       let n = 0;
-      grp.sets.forEach((s) => { if (!s.warmup) n++; detail.append(setLine(s, n)); });
+      grp.sets.forEach((s) => { if (!s.warmup) n++; detail.append(setLine(s, n, { ownerName: p.name })); });
     }
     card.append(el('button', { class: 'btn sm', style: 'margin-top:8px', onClick: (e) => {
       const open = detail.style.display !== 'none';
@@ -530,30 +810,50 @@ function viewHistory(v) {
 
 function viewExercisePool(v) {
   const input = el('input', { placeholder: 'Filter…', autocomplete: 'off' });
-  const list = el('div');
+  const list = el('div', { class: 'manage-list' });
 
   const paint = () => {
     clear(list);
-    for (const ex of searchExercises(state.exercises, input.value)) {
-      list.append(el('button', { class: 'result', onClick: () => go('exercises/' + ex.id) },
+    const hits = searchExercises(state.exercises, input.value);
+    if (!hits.length) {
+      list.append(el('div', { class: 'empty tiny' }, 'No match.'));
+      return;
+    }
+    for (const ex of hits) {
+      list.append(el('button', { class: 'manage-row', onClick: () => go('exercises/' + ex.id) },
         el('div', { class: 'grow' },
           el('div', { class: 'name' }, ex.name),
-          el('div', { class: 'row wrap', style: 'gap:4px;margin-top:4px' },
-            ...(ex.muscles || []).map((m, i) => el('span', { class: 'pill' + (i === 0 ? ' primary-muscle' : '') }, m)))
+          el('div', { class: 'meta' },
+            (ex.muscles || []).join(' · ') +
+            '   ·   ' + (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/'))
         ),
-        el('span', { class: 'tiny faint' }, (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/'))
+        el('span', { class: 'edit-tag' }, 'Edit')
       ));
     }
   };
   input.addEventListener('input', paint);
 
   v.append(el('div', { class: 'row spread', style: 'margin-bottom:10px' },
-    el('h2', { style: 'margin:0' }, 'Exercise pool'),
-    el('span', { class: 'tiny faint' }, `${state.exercises.length}`)
+    el('h2', { style: 'margin:0' }, 'Exercises'),
+    el('span', { class: 'tiny faint' }, `${state.exercises.length} defined`)
   ));
-  v.append(input, el('div', { style: 'height:12px' }), list);
-  v.append(el('button', { class: 'btn primary block', style: 'margin-top:8px', onClick: () => go('exercises/new') },
-    '+ New exercise'));
+
+  // The rows below look like the logging picker did, so say plainly what they do.
+  v.append(el('div', { class: 'notice' },
+    'This is the library — tapping an exercise edits its definition. ',
+    el('strong', {}, 'To log a set, use the Log tab.')));
+
+  v.append(
+    el('div', { class: 'row', style: 'margin-bottom:12px' },
+      el('div', { class: 'grow' }, input),
+      el('button', {
+        class: 'btn', style: 'min-width:var(--tap);padding:0;font-size:1.3rem;line-height:1',
+        title: 'New exercise', 'aria-label': 'New exercise',
+        onClick: () => go('exercises/new'),
+      }, '+')
+    ),
+    list
+  );
   paint();
 }
 
@@ -668,6 +968,7 @@ function viewExerciseEditor(v, id) {
  * gets an attacker nothing.
  */
 function showUnlock(message) {
+  hideSplash();
   document.getElementById('topbar').style.display = 'none';
   document.getElementById('tabs').style.display = 'none';
 
@@ -679,15 +980,18 @@ function showUnlock(message) {
   const err = el('div', { class: 'tiny', style: 'color:var(--bad);min-height:18px;margin-top:8px' }, message || '');
 
   const unlock = async () => {
-    const key = input.value.trim();
-    if (!key) return;
+    const raw = input.value.trim();
+    if (!raw) return;
+    const { apiKey, owner } = parseAccessKey(raw);
+    if (!apiKey) return;
     err.textContent = '';
     btn.disabled = true;
     btn.textContent = 'Checking…';
     try {
-      initFirebase(key);
+      initFirebase(apiKey);
       await ready();
-      saveKey(key);
+      saveKey(apiKey);
+      if (owner) saveDeviceOwner(owner);
       location.reload();
     } catch (e) {
       clearKey();
@@ -704,9 +1008,11 @@ function showUnlock(message) {
 
   clear(viewEl()).append(el('div', { style: 'max-width:380px;margin:12vh auto 0;text-align:center' },
     el('div', { style: 'font-size:2.6rem' }, '🏋️'),
-    el('h2', { style: 'margin:14px 0 6px' }, 'Gym Notes'),
+    el('h2', { style: 'margin:14px 0 6px' }, 'Spotter'),
     el('p', { class: 'muted tiny', style: 'margin:0 0 20px' },
       'This device needs the access key once. Paste it and it stays in this browser.'),
+    el('p', { class: 'tiny faint', style: 'margin:-12px 0 16px' },
+      `Add ${KEY_DELIMITER}YourName to the end so the app knows whose phone this is.`),
     input, err,
     el('div', { style: 'height:12px' }),
     btn
@@ -722,6 +1028,7 @@ async function boot() {
   const key = getStoredKey();
   if (!key) return showUnlock();
 
+  splashStage('connecting…');
   initFirebase(key);
   try {
     await ready();
@@ -730,9 +1037,12 @@ async function boot() {
     throw e;
   }
 
+  splashStage('loading exercises…');
   await S.ensureSeedProfiles(SEED_PROFILES);
   const n = await S.seedExercises(SEED_EXERCISES);
   if (n) toast(`Seeded ${n} exercises`);
+
+  splashStage('almost there…');
 
   S.watchProfiles((rows) => {
     state.profiles = rows;
@@ -752,6 +1062,7 @@ async function boot() {
 
 boot().catch((err) => {
   console.error(err);
+  hideSplash();
   clear(viewEl()).append(el('div', { class: 'empty' },
     'Could not connect to Firebase.', el('br'),
     el('span', { class: 'tiny' }, err.message)));

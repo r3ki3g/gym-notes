@@ -22,6 +22,19 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 
 const STORAGE_KEY = 'gn.apikey';
+const OWNER_KEY   = 'gn.owner';
+
+/** The access key doubles as device identity: "AIza...---Prabhashwara". */
+export const KEY_DELIMITER = '---';
+
+export function parseAccessKey(raw) {
+  const i = (raw || '').indexOf(KEY_DELIMITER);
+  if (i === -1) return { apiKey: (raw || '').trim(), owner: null };
+  return {
+    apiKey: raw.slice(0, i).trim(),
+    owner:  raw.slice(i + KEY_DELIMITER.length).trim() || null,
+  };
+}
 
 // Safe to publish — none of this grants access without the key.
 const BASE_CONFIG = {
@@ -39,7 +52,19 @@ export function saveKey(k) {
   try { localStorage.setItem(STORAGE_KEY, k.trim()); } catch { /* private mode */ }
 }
 export function clearKey() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(OWNER_KEY); } catch { /* ignore */ }
+}
+
+/** Who is holding this phone — distinct from whose workout is being logged. */
+export function getDeviceOwner() {
+  try { return localStorage.getItem(OWNER_KEY); } catch { return null; }
+}
+export function saveDeviceOwner(name) {
+  const v = (name || '').trim();
+  try {
+    if (v) localStorage.setItem(OWNER_KEY, v);
+    else localStorage.removeItem(OWNER_KEY);
+  } catch { /* ignore */ }
 }
 
 export let db = null;

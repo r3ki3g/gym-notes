@@ -3,17 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0d1117">
-<title>Gym Notes</title>
+<meta name="theme-color" content="#08060d">
+<title>Spotter</title>
 <link rel="stylesheet" href="styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏋️</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🟣</text></svg>">
 </head>
 <body>
+  <!-- Lives in the markup, not in JS, so it paints on the very first frame —
+       before the module graph loads and well before anonymous auth returns. -->
+  <div id="splash">
+    <div class="lifter"><span class="plate"></span><span class="bar"></span><span class="plate"></span></div>
+    <div class="lifter-shadow"></div>
+    <div class="splash-name">Spotter</div>
+    <div class="splash-pro">PRO</div>
+    <div class="splash-stage" id="splash-stage">starting…</div>
+  </div>
+
   <header id="topbar">
-    <div class="who">
+    <div class="brandrow">
+      <span class="brand">Spotter</span>
+      <span class="pro">PRO</span>
+      <span style="flex:1"></span>
       <button id="profile-switch" class="chip" type="button">…</button>
+      <div id="sync" class="sync" title="Connection status"><span class="dot"></span><span class="sync-label">…</span></div>
     </div>
-    <div id="sync" class="sync" title="Connection status"><span class="dot"></span><span class="sync-label">…</span></div>
   </header>
 
   <main id="view" aria-live="polite"></main>
@@ -21,8 +34,9 @@
   <nav id="tabs">
     <button data-route="log"       type="button"><span>📋</span>Log</button>
     <button data-route="history"   type="button"><span>📅</span>History</button>
-    <button data-route="exercises" type="button"><span>🏋️</span>Pool</button>
-    <button data-route="profiles"  type="button"><span>👥</span>People</button>
+    <button data-route="exercises" type="button"><span>🏋️</span>Exercises</button>
+    <button data-route="alerts"    type="button"><span>🔔</span>Alerts</button>
+    <button data-route="settings"  type="button"><span>⚙️</span>Settings</button>
   </nav>
 
   <div id="toast" class="toast" role="status"></div>

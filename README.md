@@ -1,7 +1,26 @@
-# Gym Notes
+# Spotter
 
 A single-page gym log for Prabhashwara and Chamuth, replacing the WhatsApp group.
 No build step, no backend — static files on GitHub Pages, data in Firestore.
+
+The name is a double meaning: you spot each other on the bar, and you spot each
+other's numbers. Change it in `index.html` (`<title>` and `.brand`) if something
+better turns up.
+
+## Two lists, two jobs
+
+The **Log** tab's exercise picker and the **Exercises** library used to render
+with identical cards, so tapping one in the library felt like it should start
+logging. They now look deliberately different:
+
+| | Log picker | Exercises library |
+|---|---|---|
+| Shape | raised cards, gaps between | flat rows, hairline dividers |
+| Muscles | coloured pills | plain grey text |
+| Affordance | purple `›` chevron | bordered `EDIT` tag |
+| Header | — | a notice saying where to log instead |
+
+If you add a third list later, give it its own shape too.
 
 ## Deploy
 
@@ -29,6 +48,17 @@ The Firebase `apiKey` is **not in this repo**. Everything else in the config is 
 On first run each browser shows an unlock screen. Paste the key once; it goes to
 `localStorage` and stays on that device. Nobody reading this public source can
 reach the database without it.
+
+### Key format carries device identity
+
+Append `---YourName` so the app knows whose phone it is:
+
+```
+AIzaSy...---Prabhashwara
+```
+
+Parsed on unlock and stored separately. Without the suffix the app asks once with
+a picker instead. Change it any time under **Profiles → This phone belongs to**.
 
 ### ⚠️ Never run `firebase deploy`
 
@@ -73,7 +103,105 @@ Local dev: `python3 -m http.server 8777` then open `http://localhost:8777`.
 | `js/units.js` | Blocks / kg / lb, conversion, formatting |
 | `js/seed.js` | 34 exercises lifted from the chat log |
 | `js/ui.js` | DOM helpers, toast, modals |
+| `js/notify.js` | Activity chime, sound preference, synth fallback |
 | `js/app.js` | State, router, views |
+
+## Logging on someone else's behalf
+
+You two log each other's sets, so the app tracks two different people per entry:
+the **profile** (whose workout) and **`enteredBy`** (who typed it).
+
+When they differ:
+
+- the profile chip in the top bar turns **gold**
+- a banner reads `⚠️ You are logging for Chamuth — despite actually being Prabhashwara`
+- **every save shows a full-screen confirm with one big OK button**
+- the set renders a gold `entered by Prabhashwara` tag, in today's log and in history
+
+The confirm fires on *every* cross-profile set, by explicit request — post-workout
+nobody reads carefully, and a set written to the wrong person costs more than one
+extra tap. Cancel stays deliberately small but exists, or the confirmation would
+be theatre.
+
+## Activity nudge
+
+When the other person logs a set, a small toast appears and a short tone plays.
+Your own entries never notify you.
+
+**No polling.** `onSnapshot` is a live socket push, so the nudge arrives the
+instant the write lands and costs nothing beyond reading the document itself. A
+5-second poll would be both slower and far more expensive.
+
+It needs its own subscription because the main one only follows the *active*
+profile — Chamuth logging his own workout never reaches a phone showing
+Prabhashwara. `watchActivity()` in `js/store.js` watches today's sets across all
+profiles and reports only genuinely new IDs, which keeps the offline cache's
+double delivery (once from disk, once from the server) from firing twice.
+
+Rate limited to one tone per 15 seconds and coalesced, so a burst of entries is
+one toast, not six. The toast shows for 3 seconds.
+
+The **Alerts** tab keeps the same events as a feed with relative timestamps
+(`5s ago`, `12m ago`), derived from today's sets rather than stored separately —
+an activity collection would mean a second write per set for information the set
+already carries. A gold badge on the tab counts unread ones and clears on open.
+
+Two independent switches in **Settings → Alerts**:
+
+| | Toast | Tone | Alerts tab |
+|---|---|---|---|
+| Both on | yes | yes | fills |
+| Sound off | yes | no | fills |
+| Notifications off | no | no | fills |
+
+**Vibrate** is a third switch, shown only where the browser supports it. iOS
+Safari has never implemented the Vibration API, so iPhones get a greyed-out
+"N/A" row instead of a toggle that would silently do nothing.
+
+Tone and buzz share one rate limit, so a burst of sets cannot become a stutter
+of pulses.
+
+### Why vibration is foreground-only
+
+The spec has user agents drop vibration requests while `document.hidden` is
+true, and `buzz()` checks that before calling. This holds **even in browsers
+that keep audio alive in the background**, such as Brave on Android: background
+media playback keeps the audio pipeline running, it does not make the page
+visible. Audio has a real chance of still sounding; vibration does not.
+
+For a buzz with the phone locked you need Web Push and a service worker, not
+this API.
+
+The feed is history, not an interruption, so it fills regardless.
+
+Tone: drop `sounds/notify.mp3` in to replace the built-in chime — see
+`sounds/README.md`. Without a file it synthesises a rising fifth through Web
+Audio, so it works with nothing installed. The element is preloaded and reused,
+so the first chime of a session doesn't wait on the download.
+
+## Boot splash
+
+A gold barbell doing reps, the wordmark under a travelling gold shine, a
+glinting `PRO` plate, and a progress line (`connecting…` → `loading exercises…`
+→ `almost there…`).
+
+Animation timing is deliberate: the shine and glint run at 2.3s, exactly two
+1.15s rep cycles, so the glint crosses the `PRO` badge at the top of every
+second lift instead of drifting against it.
+
+It lives in `index.html`, not in JavaScript, so it paints on the first frame —
+before the module graph loads and well before anonymous auth returns. Removing
+it from JS would leave the ~500ms auth round trip showing an empty page.
+
+A 12-second failsafe swaps the text for `still trying — check your connection`,
+because a first-ever load on gym wifi can hang on auth with nothing to explain
+itself. Honours `prefers-reduced-motion`.
+
+## Layout note
+
+`body` carries ~160px of bottom padding: 68px for the tab bar plus a clear lane
+for the toast. Without it a toast can sit on top of the last button on a page
+with no way to scroll past it.
 
 ## Data model
 
@@ -87,7 +215,8 @@ profiles/{id}   name
 exercises/{id}  name, muscles[] (ORDERED), allowedUnits[], defaultUnit,
                 perSideDefault, unilateralDefault, aliases[]
 sets/{id}       profileId, exerciseId, date, weight, unit, perSide, reps,
-                halfReps, unilateral, support, warmup, comment, drops[]
+                halfReps, unilateral, support, warmup, comment, drops[],
+                enteredBy   <- who physically typed it
 ```
 
 ### The two meanings of "each side"

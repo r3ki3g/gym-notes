@@ -92,6 +92,38 @@ export const addSet = async (payload) =>
 export const saveSet   = (id, patch) => updateDoc(doc(db, COL.sets, id), patch);
 export const deleteSet = (id) => deleteDoc(doc(db, COL.sets, id));
 
+/**
+ * Watches every set logged today, across all profiles, and reports only the ones
+ * that appear after the subscription settles.
+ *
+ * Tracks seen IDs rather than trusting docChanges(): with the offline cache a
+ * snapshot arrives from disk first and again from the server, and both report
+ * the same documents as "added". Comparing IDs makes a double delivery harmless.
+ */
+export function watchActivity(date, onChange) {
+  let stop = () => {};
+  const seen = new Set();
+  let primed = false;
+
+  ready().then(() => {
+    stop = onSnapshot(
+      query(collection(db, COL.sets), where('date', '==', date)),
+      (snap) => {
+        const all = rows(snap);
+        const fresh = snap.docs.filter((d) => !seen.has(d.id)).map((d) => ({ id: d.id, ...d.data() }));
+        snap.docs.forEach((d) => seen.add(d.id));
+
+        // The first delivery is existing history, so it populates the feed but
+        // must not fire a toast for every set already logged today.
+        onChange({ all, added: primed ? fresh : [] });
+        primed = true;
+      },
+      (err) => console.error('[activity] subscription failed', err)
+    );
+  });
+  return () => stop();
+}
+
 /* ---------- seeding ---------- */
 export async function seedExercises(list) {
   await ready();

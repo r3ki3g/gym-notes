@@ -1,8 +1,10 @@
 :root{
-  --bg:#0d1117; --panel:#161b22; --panel-2:#1c2330; --line:#2a3340;
-  --text:#e6edf3; --dim:#8b949e; --faint:#6e7681;
-  --accent:#4fc3f7; --accent-ink:#04212e;
-  --good:#3fb950; --warn:#d29922; --bad:#f85149;
+  /* near-black with a purple cast, so the accent feels native rather than stuck on */
+  --bg:#08060d; --panel:#13101c; --panel-2:#1c1729; --line:#2e2540;
+  --text:#f2eef8; --dim:#a79cba; --faint:#8d82a3;
+  --accent:#a855f7; --accent-ink:#17082b;
+  --gold:#f0b429; --gold-dim:#3a2c0c;
+  --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
   --radius:12px; --tap:46px;
 }
 *{box-sizing:border-box}
@@ -10,7 +12,8 @@ html,body{margin:0;padding:0}
 body{
   background:var(--bg); color:var(--text);
   font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-  padding-bottom:calc(68px + env(safe-area-inset-bottom));
+  /* tab bar (68) + toast lane (~92) so a toast never covers the last button */
+  padding-bottom:calc(160px + env(safe-area-inset-bottom));
   -webkit-text-size-adjust:100%;
 }
 button,input,select,textarea{font:inherit;color:inherit}
@@ -19,26 +22,40 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
 
 /* ---------- chrome ---------- */
 #topbar{
-  position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;
-  padding:calc(8px + env(safe-area-inset-top)) 14px 8px;
-  background:rgba(13,17,23,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:20;
+  padding:calc(8px + env(safe-area-inset-top)) 12px 9px;
+  background:rgba(8,6,13,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
 }
-.who{flex:1;min-width:0}
+.brandrow{display:flex;align-items:center;gap:8px}
+.brand{
+  font-size:1.06rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  background:linear-gradient(95deg,var(--accent),#e0a3ff 55%,var(--gold));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.pro{
+  font-size:.58rem;font-weight:900;letter-spacing:.14em;
+  background:linear-gradient(135deg,var(--gold),#ffd97a);color:#2b1f02;
+  border-radius:4px;padding:3px 6px;line-height:1;
+}
+
 .chip{
   background:var(--panel-2);border:1px solid var(--line);color:var(--text);
-  border-radius:999px;padding:7px 14px;max-width:100%;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
+  border-radius:7px;padding:5px 9px;font-size:.8rem;font-weight:600;line-height:1.3;
+  max-width:44vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;
 }
-.chip::after{content:" ▾";color:var(--dim);font-weight:400}
-.sync{display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--faint)}
+.chip::after{content:" ▾";color:var(--faint);font-weight:400;font-size:.9em}
+.sync{display:flex;align-items:center;gap:5px;font-size:.7rem;color:var(--faint);flex:none}
+.sync-label{display:none}
+@media (min-width:430px){ .sync-label{display:inline} }
 .sync .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
 .sync.on .dot{background:var(--good)} .sync.off .dot{background:var(--warn)}
 
 #view{padding:14px 14px 20px;max-width:620px;margin:0 auto}
 
 #tabs{
-  position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(4,1fr);
-  background:rgba(13,17,23,.95);backdrop-filter:blur(8px);border-top:1px solid var(--line);
+  position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);
+  background:rgba(8,6,13,.95);backdrop-filter:blur(8px);border-top:1px solid var(--line);
   padding-bottom:env(safe-area-inset-bottom);
 }
 #tabs button{
@@ -46,6 +63,12 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
   display:flex;flex-direction:column;align-items:center;gap:3px;font-size:.66rem;letter-spacing:.03em;
 }
 #tabs button span{font-size:1.22rem;line-height:1}
+#tabs button{position:relative}
+.tab-dot{
+  position:absolute;top:7px;right:calc(50% - 15px);
+  width:8px;height:8px;border-radius:50%;background:var(--gold);
+  box-shadow:0 0 0 2px var(--bg);
+}
 #tabs button.active{color:var(--accent)}
 
 /* ---------- blocks ---------- */
@@ -73,8 +96,9 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
   padding:0 15px;min-height:var(--tap);font-weight:600;white-space:nowrap;
 }
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-.btn.danger{color:var(--bad);border-color:#43242a}
+.btn.danger{color:var(--bad);border-color:#4a2230}
 .btn.block{width:100%}
+.btn.big{min-height:66px;font-size:1.05rem;border-radius:11px}
 .btn.sm{min-height:34px;padding:0 10px;font-size:.8rem;font-weight:500}
 .btn:active{transform:translateY(1px)}
 .btn[disabled]{opacity:.45}
@@ -87,7 +111,17 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 
 .pill{display:inline-block;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:.72rem;color:var(--dim)}
 .pill.primary-muscle{border-color:var(--accent);color:var(--accent)}
-.pill.warmup{border-color:#3a3320;color:var(--warn)}
+.pill.warmup{border-color:#3f3216;color:var(--warn)}
+/* entered by the other person, on this profile's behalf */
+.pill.by{border-color:var(--gold);color:var(--gold);background:var(--gold-dim);font-weight:600}
+
+/* the profile chip goes gold whenever you are logging for someone else */
+.chip.other{border-color:#6b5312;color:var(--gold);background:transparent}
+.chip.other::after{color:var(--gold)}
+.onbehalf{
+  background:var(--gold-dim);border:1px solid var(--gold);color:var(--gold);
+  border-radius:9px;padding:8px 12px;margin-bottom:12px;font-size:.84rem;font-weight:600;
+}
 
 /* ---------- log ---------- */
 .set-line{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--line);align-items:baseline}
@@ -102,6 +136,30 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .result{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:11px 13px;margin-bottom:8px}
 .result:active{border-color:var(--accent)}
 .result .name{font-weight:600}
+/* the logging picker gets a chevron: this row DOES something with the exercise */
+.result .go{color:var(--accent);font-size:1.1rem;flex:none}
+
+/* Management rows look nothing like the picker above: flat, hairline-separated,
+   with an explicit Edit affordance, so nobody taps one expecting to log a set. */
+.manage-list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.manage-row{
+  display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+  background:transparent;border:0;border-bottom:1px solid var(--line);
+  padding:12px 13px;
+}
+.manage-row:last-child{border-bottom:0}
+.manage-row:active{background:var(--panel-2)}
+.manage-row .name{font-weight:500;font-size:.94rem}
+.manage-row .meta{color:var(--faint);font-size:.74rem;margin-top:3px}
+.edit-tag{
+  flex:none;font-size:.68rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:4px 8px;
+}
+.notice{
+  background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 9px 9px 0;padding:10px 13px;margin-bottom:14px;
+  font-size:.81rem;color:var(--dim);
+}
 
 .lasttime{background:var(--panel-2);border-left:2px solid var(--accent);border-radius:0 9px 9px 0;padding:9px 12px;margin-bottom:12px;font-size:.85rem}
 
@@ -109,9 +167,101 @@ dialog{border:0;background:transparent;padding:0;max-width:100%}
 dialog::backdrop{background:rgba(0,0,0,.65)}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;width:min(94vw,520px)}
 
+.feed-item{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--line)}
+.feed-item:last-child{border-bottom:0}
+.feed-item.fresh .feed-icon{background:var(--gold-dim);border-color:var(--gold)}
+.feed-icon{
+  width:34px;height:34px;border-radius:50%;flex:none;
+  background:var(--panel-2);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:1rem;
+}
+.feed-when{color:var(--faint);font-size:.72rem;white-space:nowrap}
+
 .toast{
   position:fixed;left:50%;bottom:84px;transform:translate(-50%,14px);
   background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
   padding:9px 17px;font-size:.85rem;opacity:0;pointer-events:none;transition:.22s;z-index:60;max-width:92vw;
 }
 .toast.show{opacity:1;transform:translate(-50%,0)}
+
+
+/* ---------- boot splash ---------- */
+#splash{
+  position:fixed;inset:0;z-index:100;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:var(--bg);
+  transition:opacity .35s ease, visibility .35s ease;
+}
+#splash.gone{opacity:0;visibility:hidden;pointer-events:none}
+
+/* a barbell doing reps: plates rise, the floor shadow tightens beneath them */
+.lifter{display:flex;align-items:center;animation:rep 1.15s ease-in-out infinite}
+.lifter .bar{
+  width:54px;height:5px;border-radius:3px;
+  background:linear-gradient(90deg,#8a7020,var(--gold) 32%,#fff0bd 50%,var(--gold) 68%,#8a7020);
+  box-shadow:0 0 10px rgba(240,180,41,.35);
+}
+.lifter .plate{
+  width:15px;height:46px;border-radius:4px;
+  background:linear-gradient(180deg,#c084fc,var(--accent) 45%,#7c3aed);
+  box-shadow:0 0 18px rgba(168,85,247,.45);
+}
+.lifter-shadow{
+  width:74px;height:8px;margin-top:18px;border-radius:50%;
+  background:radial-gradient(ellipse at center,rgba(168,85,247,.4),transparent 70%);
+  animation:liftshadow 1.15s ease-in-out infinite;
+}
+@keyframes rep{
+  0%,100%{transform:translateY(13px)}
+  45%    {transform:translateY(-13px)}
+}
+@keyframes liftshadow{
+  0%,100%{transform:scaleX(1);opacity:.55}
+  45%    {transform:scaleX(.7);opacity:.2}
+}
+
+.splash-name{
+  margin-top:26px;font-size:1.25rem;font-weight:800;
+  letter-spacing:.24em;text-transform:uppercase;
+  background:linear-gradient(100deg,
+    var(--accent) 0%, #e0a3ff 28%,
+    #fff3c4 44%, var(--gold) 52%,   /* the shine band */
+    #e0a3ff 70%, var(--accent) 100%);
+  background-size:260% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shine 2.3s linear infinite;   /* exactly two reps */
+}
+@keyframes shine{
+  from{background-position:160% 0}
+  to  {background-position:-60% 0}
+}
+
+/* PRO plate with a glint that crosses it once per cycle */
+.splash-pro{
+  position:relative;overflow:hidden;margin-top:11px;
+  font-size:.6rem;font-weight:900;letter-spacing:.2em;line-height:1;
+  color:#2b1f02;border-radius:5px;padding:5px 11px;
+  background:linear-gradient(135deg,#a67c0a,var(--gold) 38%,#ffeaa3 50%,var(--gold) 62%,#a67c0a);
+  box-shadow:0 2px 12px rgba(240,180,41,.32);
+}
+.splash-pro::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(105deg,transparent 36%,rgba(255,255,255,.8) 50%,transparent 64%);
+  transform:translateX(-130%);
+  animation:glint 2.3s ease-in-out infinite;  /* glints at the top of the lift */
+}
+@keyframes glint{
+  0%,58%{transform:translateX(-130%)}
+  100%  {transform:translateX(130%)}
+}
+.splash-stage{
+  margin-top:8px;font-size:.74rem;color:var(--faint);
+  letter-spacing:.05em;min-height:1.1em;
+}
+.splash-stage.failed{color:var(--bad)}
+
+@media (prefers-reduced-motion:reduce){
+  .lifter,.lifter-shadow,.splash-name,.splash-pro::after{animation:none}
+  .lifter{transform:none}
+  .splash-name{background-position:50% 0}
+}
