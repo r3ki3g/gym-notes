@@ -181,13 +181,12 @@ so the first chime of a session doesn't wait on the download.
 
 ## Boot splash
 
-A gold barbell doing reps, the wordmark under a travelling gold shine, a
-glinting `PRO` plate, and a progress line (`connecting…` → `loading exercises…`
-→ `almost there…`).
+The wordmark under a travelling gold shine, a glinting `PRO` plate, a hairline
+indeterminate progress sweep, and a status line (`connecting…` →
+`loading exercises…` → `almost there…`).
 
-Animation timing is deliberate: the shine and glint run at 2.3s, exactly two
-1.15s rep cycles, so the glint crosses the `PRO` badge at the top of every
-second lift instead of drifting against it.
+Shine and glint run at 2.8s — exactly two 1.4s progress sweeps — so they stay in
+phase instead of drifting against each other.
 
 It lives in `index.html`, not in JavaScript, so it paints on the first frame —
 before the module graph loads and well before anonymous auth returns. Removing

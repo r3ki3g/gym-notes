@@ -194,34 +194,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 }
 #splash.gone{opacity:0;visibility:hidden;pointer-events:none}
 
-/* a barbell doing reps: plates rise, the floor shadow tightens beneath them */
-.lifter{display:flex;align-items:center;animation:rep 1.15s ease-in-out infinite}
-.lifter .bar{
-  width:54px;height:5px;border-radius:3px;
-  background:linear-gradient(90deg,#8a7020,var(--gold) 32%,#fff0bd 50%,var(--gold) 68%,#8a7020);
-  box-shadow:0 0 10px rgba(240,180,41,.35);
-}
-.lifter .plate{
-  width:15px;height:46px;border-radius:4px;
-  background:linear-gradient(180deg,#c084fc,var(--accent) 45%,#7c3aed);
-  box-shadow:0 0 18px rgba(168,85,247,.45);
-}
-.lifter-shadow{
-  width:74px;height:8px;margin-top:18px;border-radius:50%;
-  background:radial-gradient(ellipse at center,rgba(168,85,247,.4),transparent 70%);
-  animation:liftshadow 1.15s ease-in-out infinite;
-}
-@keyframes rep{
-  0%,100%{transform:translateY(13px)}
-  45%    {transform:translateY(-13px)}
-}
-@keyframes liftshadow{
-  0%,100%{transform:scaleX(1);opacity:.55}
-  45%    {transform:scaleX(.7);opacity:.2}
-}
-
-.splash-name{
-  margin-top:26px;font-size:1.25rem;font-weight:800;
+.splash-name{font-size:1.25rem;font-weight:800;
   letter-spacing:.24em;text-transform:uppercase;
   background:linear-gradient(100deg,
     var(--accent) 0%, #e0a3ff 28%,
@@ -229,7 +202,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
     #e0a3ff 70%, var(--accent) 100%);
   background-size:260% 100%;
   -webkit-background-clip:text;background-clip:text;color:transparent;
-  animation:shine 2.3s linear infinite;   /* exactly two reps */
+  animation:shine 2.8s linear infinite;   /* exactly two progress sweeps */
 }
 @keyframes shine{
   from{background-position:160% 0}
@@ -248,12 +221,27 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
   content:'';position:absolute;inset:0;
   background:linear-gradient(105deg,transparent 36%,rgba(255,255,255,.8) 50%,transparent 64%);
   transform:translateX(-130%);
-  animation:glint 2.3s ease-in-out infinite;  /* glints at the top of the lift */
+  animation:glint 2.8s ease-in-out infinite;
 }
 @keyframes glint{
   0%,58%{transform:translateX(-130%)}
   100%  {transform:translateX(130%)}
 }
+/* indeterminate progress — a gold highlight crossing a hairline track */
+.splash-progress{
+  width:148px;height:2px;margin-top:22px;border-radius:2px;
+  background:var(--line);overflow:hidden;
+}
+.splash-progress::after{
+  content:'';display:block;height:100%;width:38%;
+  background:linear-gradient(90deg,transparent,var(--gold),#fff0bd,var(--gold),transparent);
+  animation:sweep 1.4s ease-in-out infinite;
+}
+@keyframes sweep{
+  from{transform:translateX(-110%)}
+  to  {transform:translateX(375%)}
+}
+
 .splash-stage{
   margin-top:8px;font-size:.74rem;color:var(--faint);
   letter-spacing:.05em;min-height:1.1em;
@@ -261,7 +249,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 .splash-stage.failed{color:var(--bad)}
 
 @media (prefers-reduced-motion:reduce){
-  .lifter,.lifter-shadow,.splash-name,.splash-pro::after{animation:none}
-  .lifter{transform:none}
+  .splash-name,.splash-pro::after,.splash-progress::after{animation:none}
   .splash-name{background-position:50% 0}
+  .splash-progress::after{width:100%}
 }
