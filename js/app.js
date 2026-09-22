@@ -3,8 +3,10 @@ import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, MUSCLES } from './search.js';
-import { UNITS, formatLoad, formatReps, setVolumeKg, SUPPORT } from './units.js';
-import { el, clear, toast, confirmSheet, confirmOnBehalf, promptSheet, segmented, field, dayLabel, timeAgo, stampMs } from './ui.js';
+import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
+import { UNITS, formatLoad, formatReps, setVolumeKg, SUPPORT, stepFor, snapTo } from './units.js';
+import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper } from './ui.js';
+import { VERSION } from './version.js';
 import { chime, soundOn, setSound, notifOn, setNotif, primeAudio,
          vibrateOn, setVibrate, vibrateSupported, buzzTest } from './notify.js';
 
@@ -16,15 +18,16 @@ const state = {
   sets: [],                 // every set for the active profile
   profileId: localStorage.getItem('gn.profile') || null,
   owner: getDeviceOwner(),          // who is holding THIS phone
-  activity: [],                     // today's sets from everyone, for the feed
+  recent: [],                       // every profile's sets in the recent window
   seenAlerts: Number(localStorage.getItem('gn.seenAlerts') || 0),
 
   loaded: { profiles: false, exercises: false, sets: false },
 };
 
 let unsubSets = () => {};
-let unsubActivity = () => {};
-let activityDate = null;
+let unsubRecent = () => {};
+let recentSince = null;
+const HISTORY_DAYS = 90;
 
 // True once the user has touched the set form. A snapshot arriving from the
 // other person's phone must not rebuild the DOM and wipe half-typed input —
@@ -32,8 +35,15 @@ let activityDate = null;
 let formDirty = false;
 const viewEl = () => document.getElementById('view');
 const activeProfile = () => state.profiles.find((p) => p.id === state.profileId) || null;
-/** True when the selected profile is not the person holding the phone. */
-const isOnBehalf = () => {
+/**
+ * True when you are looking at someone else's log and history.
+ *
+ * This used to mean "logging on their behalf", back when the top-bar chip chose
+ * the write target. Since the two-sided exercise view, the target comes from the
+ * URL and this selection is purely a view filter — so the name and the styling
+ * both had to change, or gold would keep implying a cross-person write.
+ */
+const viewingSomeoneElse = () => {
   const p = activeProfile();
   return !!(p && state.owner && p.name !== state.owner);
 };
@@ -82,7 +92,7 @@ function paintTopbar() {
   const btn = document.getElementById('profile-switch');
   const p = activeProfile();
   btn.textContent = p ? p.name : 'Choose person';
-  btn.classList.toggle('other', isOnBehalf());
+  btn.classList.toggle('viewing', viewingSomeoneElse());
   btn.onclick = () => go('settings');
 
   const tab = route()[0];
@@ -113,6 +123,11 @@ window.addEventListener('offline', () => paintSync(false));
 let splashDone = false;
 
 /** Progress text under the wordmark. No-op once the splash is gone. */
+function paintSplashVersion() {
+  const n = document.getElementById('splash-version');
+  if (n) n.textContent = `v${VERSION}`;
+}
+
 function splashStage(text, failed = false) {
   if (splashDone) return;
   const n = document.getElementById('splash-stage');
@@ -140,9 +155,9 @@ const splashFailsafe = setTimeout(() => {
 function render() {
   paintTopbar();
   formDirty = false;
-  if (state.loaded.profiles && state.owner) { startActivityWatch(); primeAudio(); }
+  if (state.loaded.profiles && state.owner) { startRecentWatch(); primeAudio(); }
   const v = clear(viewEl());
-  const [tab, arg] = route();
+  const [tab, arg, arg2] = route();
 
   if (!state.loaded.profiles || !state.loaded.exercises) {
     return v.append(el('div', { class: 'empty' }, 'Loading…'));
@@ -158,8 +173,9 @@ function render() {
     case 'settings':
     case 'profiles':  return viewSettings(v);
     case 'search':    return viewSearch(v);
-    case 'set':       return viewLogSet(v, arg);
+    case 'set':       return viewLogSet(v, arg, arg2);
     case 'history':   return viewHistory(v);
+    case 'ex':        return viewExercise(v, arg);
     case 'exercises': return arg ? viewExerciseEditor(v, arg) : viewExercisePool(v);
     default:          return viewLog(v);
   }
@@ -169,8 +185,9 @@ function render() {
 
 /** Sets entered by the other person, newest first. */
 function alertItems() {
-  return state.activity
-    .filter((x) => x.enteredBy && x.enteredBy !== state.owner)
+  const today = S.todayKey();
+  return state.recent
+    .filter((x) => x.date === today && x.enteredBy && x.enteredBy !== state.owner)
     .sort((a, b) => (stampMs(b.createdAt) || 0) - (stampMs(a.createdAt) || 0));
 }
 
@@ -186,17 +203,19 @@ function markAlertsSeen() {
  * Firestore socket, so there is no polling and no extra read cost beyond the
  * documents themselves.
  */
-function startActivityWatch() {
-  const date = S.todayKey();
-  if (activityDate === date) return;
-  activityDate = date;
-  unsubActivity();
+function startRecentWatch() {
+  const since = S.daysAgoKey(HISTORY_DAYS);
+  if (recentSince === since) return;
+  recentSince = since;
+  unsubRecent();
 
-  unsubActivity = S.watchActivity(date, ({ all, added }) => {
-    state.activity = all;
+  unsubRecent = S.watchRecent(since, ({ all, added }) => {
+    state.recent = all;
 
     // Your own sets are not news, and pre-identity sets can't be attributed.
-    const theirs = added.filter((x) => x.enteredBy && x.enteredBy !== state.owner);
+    const today = S.todayKey();
+    const theirs = added.filter((x) =>
+      x.date === today && x.enteredBy && x.enteredBy !== state.owner);
     if (!theirs.length) return renderFromData();
 
     if (notifOn()) {
@@ -215,6 +234,38 @@ function startActivityWatch() {
     }
     renderFromData();
   });
+}
+
+/* ============================ freshness ============================ */
+
+const FRESH_MS = 30000;
+
+/**
+ * null once a set is older than the window. `loggedAt` is the client clock and
+ * is populated immediately; `createdAt` is a server sentinel that reads null for
+ * the few hundred ms before the write is acknowledged, so it is the fallback,
+ * not the primary.
+ *
+ * Returns the age so the CSS animation can be started partway through with a
+ * negative delay — a set already 20s old glows for its remaining 10s, not a
+ * fresh 30.
+ */
+function freshness(s) {
+  const t = s.loggedAt || stampMs(s.createdAt);
+  if (!t) return null;
+  const age = Date.now() - t;
+  if (age < 0 || age > FRESH_MS) return null;
+  return { ageSec: age / 1000, own: s.enteredBy === state.owner };
+}
+
+/** Class + negative delay, or nothing. */
+function freshAttrs(s) {
+  const f = freshness(s);
+  if (!f) return { cls: '', style: '' };
+  return {
+    cls: f.own ? ' fresh-own' : ' fresh-other',
+    style: `animation-delay:-${f.ageSec.toFixed(2)}s`,
+  };
 }
 
 /* ============================ alerts feed ============================ */
@@ -289,14 +340,14 @@ function viewWhoAmI(v) {
     }, p.name));
   }
 
-  v.append(el('button', { class: 'btn block', style: 'margin-top:14px', onClick: async () => {
+  v.append(busyButton('+ Someone else', 'Adding…', 'btn block', async () => {
     const name = await promptSheet('Add person', '', 'Name');
     if (!name) return;
     await S.addProfile(name);
     saveDeviceOwner(name);
     state.owner = name;
     toast(`${name} added`);
-  } }, '+ Someone else'));
+  }));
 }
 
 /* ============================ settings ============================ */
@@ -322,7 +373,11 @@ function toggleRow(label, hint, isOn, onToggle) {
 function viewSettings(v) {
   v.append(el('h2', {}, 'Settings'));
 
-  v.append(el('h3', {}, 'Who are we logging for?'));
+  v.append(el('h3', {}, 'People'));
+  v.append(el('div', { class: 'notice' },
+    'Tap a name to see ', el('strong', {}, 'their log and history'), '. ',
+    'Who a set is logged ', el('em', {}, 'for'), ' is chosen on the exercise screen, ',
+    'so this never changes where your sets go.'));
 
 
   for (const p of state.profiles) {
@@ -330,7 +385,8 @@ function viewSettings(v) {
       el('button', {
         class: 'grow', style: 'background:none;border:0;text-align:left;font-weight:600;font-size:1.05rem',
         onClick: () => { setProfile(p.id); go('log'); },
-      }, p.name + (p.id === state.profileId ? '  ✓' : '')),
+      }, p.name),
+      p.id === state.profileId ? el('span', { class: 'pill viewing-pill' }, 'viewing') : null,
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onClick: async () => {
           const name = await promptSheet('Rename', p.name);
@@ -349,14 +405,14 @@ function viewSettings(v) {
     ));
   }
 
-  v.append(el('button', { class: 'btn primary block', style: 'margin-top:12px', onClick: async () => {
+  v.append(busyButton('+ Add person', 'Adding…', 'btn primary block', async () => {
     const name = await promptSheet('Add person', '', 'Name');
     if (!name) return;
     const id = await S.addProfile(name);
     setProfile(id);
     toast(`${name} added`);
     go('log');
-  } }, '+ Add person'));
+  }));
 
   // --- this device ---------------------------------------------------------
   v.append(el('h3', {}, 'This device'));
@@ -405,6 +461,9 @@ function viewSettings(v) {
   v.append(el('div', { class: 'tiny faint', style: 'margin:-2px 0 4px' },
     'The Alerts tab keeps filling either way — these only control the interruption.'));
 
+  v.append(el('div', { class: 'tiny faint', style: 'text-align:center;margin-top:30px;opacity:.7' },
+    `BroSplit Pro · v${VERSION}`));
+
   v.append(el('button', { class: 'btn block danger', style: 'margin-top:26px', onClick: async () => {
     const ok = await confirmSheet('Forget key on this device?',
       'You will need to paste it again next time. Use this before handing the phone to anyone.',
@@ -450,7 +509,8 @@ function setLine(s, index, opts = {}) {
   }
   if (s.comment) main.append(el('div', { class: 'cmt' }, s.comment));
 
-  return el('div', { class: 'set-line' },
+  const fresh = freshAttrs(s);
+  return el('div', { class: 'set-line' + fresh.cls, style: fresh.style || null },
     el('span', { class: 'set-no' }, s.warmup ? 'W' : `${index}.`),
     main,
     opts.onDelete ? el('button', { class: 'btn sm danger', onClick: opts.onDelete }, '✕') : null
@@ -473,9 +533,9 @@ function viewLog(v) {
     el('span', { class: 'tiny faint' }, `${todaySets.length} set${todaySets.length === 1 ? '' : 's'}`)
   ));
 
-  if (isOnBehalf()) {
-    v.append(el('div', { class: 'onbehalf' },
-      `⚠️ You are logging for ${p.name} — despite actually being ${state.owner}`));
+  if (viewingSomeoneElse()) {
+    v.append(el('div', { class: 'viewing-note' },
+      `Viewing ${p.name}'s log · you are ${state.owner}`));
   }
 
   v.append(el('button', { class: 'btn primary block', style: 'margin-bottom:14px', onClick: () => go('search') },
@@ -491,7 +551,7 @@ function viewLog(v) {
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'row spread', style: 'margin-bottom:6px' },
       el('strong', { class: 'grow' }, ex ? ex.name : '(deleted exercise)'),
-      el('button', { class: 'btn sm', onClick: () => go('set/' + grp.exerciseId) }, '+ set')
+      el('button', { class: 'btn sm', onClick: () => go('ex/' + grp.exerciseId) }, '+ set')
     ));
 
     let n = 0;
@@ -523,7 +583,7 @@ function viewSearch(v) {
       results.append(el('div', { class: 'empty' }, 'No match.'));
     }
     for (const ex of hits.slice(0, 40)) {
-      results.append(el('button', { class: 'result', onClick: () => go('set/' + ex.id) },
+      results.append(el('button', { class: 'result', onClick: () => go('ex/' + ex.id) },
         el('div', { class: 'grow' },
           el('div', { class: 'name' }, ex.name),
           el('div', { class: 'row wrap', style: 'gap:4px;margin-top:4px' },
@@ -559,55 +619,154 @@ function viewSearch(v) {
   setTimeout(() => input.focus(), 30);
 }
 
-/* ============================ log a set ============================ */
+/* ============================ two-sided exercise view ============================ */
 
-/** Most recent previous day this profile trained this exercise. */
-function lastTime(exerciseId, excludeDate) {
-  const prior = state.sets
-    .filter((s) => s.exerciseId === exerciseId && s.date !== excludeDate)
-    .sort((a, b) => b.date.localeCompare(a.date));
-  if (!prior.length) return null;
-  const d = prior[0].date;
-  return { date: d, sets: prior.filter((s) => s.date === d) };
+/** @deprecated use layoutSides() — kept only for the Log tab's own header. */
+function myProfile() {
+  return state.profiles.find((p) => p.name === state.owner) || activeProfile();
 }
 
-function viewLogSet(v, exerciseId) {
+const setsFor = (profileId, exerciseId, date) => state.recent
+  .filter((x) => x.profileId === profileId && x.exerciseId === exerciseId && x.date === date)
+  .sort((a, b) => (a.loggedAt || stampMs(a.createdAt) || 0) - (b.loggedAt || stampMs(b.createdAt) || 0));
+
+/**
+ * One person's column. `header` replaces the plain name when this side is
+ * selectable, so the picker sits ON the column it controls — floating it above
+ * both columns made it read as a global switch, which is what confused things.
+ */
+function sideColumn(profile, exerciseId, date, isMe, header) {
+  const sets = setsFor(profile.id, exerciseId, date);
+  const col = el('div', { class: 'side' + (isMe ? ' me' : '') });
+
+  col.append(el('div', { class: 'side-head' },
+    isMe
+      ? el('span', { class: 'side-who grow' }, profile.name)
+      : el('div', { class: 'grow' }, header || el('span', { class: 'side-who' }, profile.name)),
+    isMe ? el('span', { class: 'side-tag' }, 'you') : null
+  ));
+
+  if (!sets.length) {
+    col.append(el('div', { class: 'side-empty' }, 'no sets yet'));
+  } else {
+    let n = 0;
+    for (const x of sets) {
+      if (!x.warmup) n++;
+      const fresh = freshAttrs(x);
+      col.append(el('div', { class: 'side-set' + fresh.cls, style: fresh.style || null },
+        el('span', { class: 'n' }, x.warmup ? 'W' : String(n)),
+        el('span', { class: 'load' }, formatLoad(x.weight, x.unit, x.perSide)),
+        el('span', { class: 'muted' }, '\u00d7' + x.reps + (x.halfReps ? `+${x.halfReps}h` : '')),
+        (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null
+      ));
+    }
+  }
+
+  col.append(el('button', { class: 'side-add', onClick: () => go(`set/${exerciseId}/${profile.id}`) },
+    '+ add set'));
+
+  // Inside the column rather than one shared block underneath: both people are
+  // logged from this one phone, so both sides need their own previous numbers.
+  const lt = lastSessionFor(state.recent, { exerciseId, profileId: profile.id, excludeDate: date });
+  if (lt) {
+    const box = el('div', { class: 'side-last' },
+      el('div', { class: 'side-last-when' }, 'last · ' + dayLabel(lt.date)));
+    for (const x of lt.sets) {
+      box.append(el('div', { class: 'side-last-set' },
+        el('span', { class: 'load' }, formatLoad(x.weight, x.unit, x.perSide)),
+        el('span', { class: 'muted' }, '×' + x.reps + (x.halfReps ? `+${x.halfReps}h` : ''))
+      ));
+    }
+    col.append(box);
+  } else {
+    col.append(el('div', { class: 'side-last' },
+      el('div', { class: 'side-last-when' }, 'no previous sets')));
+  }
+  return col;
+}
+
+/**
+ * The screen after picking an exercise. Left is always you and never changes.
+ * Right is whoever you select. Both columns are always full columns — an earlier
+ * version collapsed the right one when that person had not trained yet, which
+ * added a third name to the screen and hid the button it was meant to surface.
+ */
+function viewExercise(v, exerciseId) {
   const ex = exerciseById(exerciseId);
-  const p = activeProfile();
+  if (!ex) return go('log');
+
+  const date = S.todayKey();
+  const { mode, left, right, options } = layoutSides({
+    profiles: state.profiles,
+    owner: state.owner,
+    rightId: localStorage.getItem('gn.rightSide'),
+  });
+  if (mode === 'none' || !left) return go('settings');
+
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
+    el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
+    el('button', { class: 'btn sm', onClick: () => go('exercises/' + ex.id) }, 'Edit')
+  ));
+  v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' \u2192 ')));
+
+  if (mode === 'single') {
+    v.append(sideColumn(left, exerciseId, date, true));
+  } else {
+    // With exactly one other person there is nothing to choose, so show a name.
+    // With more, the column header becomes a <select> — compact enough to live
+    // inside a half-width column, unlike a segmented control.
+    let header = null;
+    if (options.length > 1) {
+      header = el('select', { class: 'side-pick', onChange: (e) => {
+        localStorage.setItem('gn.rightSide', e.target.value);
+        render();
+      } }, ...options.map((p) => el('option', { value: p.id, selected: p.id === right.id }, p.name)));
+    }
+    v.append(el('div', { class: 'sides' },
+      sideColumn(left, exerciseId, date, true),
+      sideColumn(right, exerciseId, date, false, header)
+    ));
+  }
+
+  v.append(el('button', { class: 'btn block', style: 'margin-top:14px', onClick: () => go('search') },
+    'Another exercise'));
+  v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: () => go('log') }, 'Done'));
+}
+
+/* ============================ log a set ============================ */
+
+/** Thin wrapper over the tested pure lookup. */
+const lastTime = (exerciseId, excludeDate, profileId) =>
+  lastSessionFor(state.recent, { exerciseId, profileId, excludeDate });
+
+function viewLogSet(v, exerciseId, profileId) {
+  const ex = exerciseById(exerciseId);
+  // The target is explicit in the URL now, not read from a global selector.
+  // That is what makes dropping the confirm in the two-sided view safe.
+  const p = resolveTarget(state.profiles, profileId, state.profileId);
   if (!ex || !p) return go('log');
 
   const today = S.todayKey();
   const draft = S.blankSet(ex);
+  const onBehalf = !!(state.owner && p.name !== state.owner);
+  const back = () => go('ex/' + exerciseId);
 
   // Carry the last set's load forward — you almost always repeat or nudge it.
-  const todays = state.sets
-    .filter((s) => s.exerciseId === exerciseId && s.date === today)
-    .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
-  const prev = todays[todays.length - 1] || lastTime(exerciseId, today)?.sets?.slice(-1)[0];
+  const todays = setsFor(p.id, exerciseId, today);
+  const prev = todays[todays.length - 1] || lastTime(exerciseId, today, p.id)?.sets?.slice(-1)[0];
   if (prev) {
     draft.weight = prev.weight; draft.unit = prev.unit;
     draft.perSide = prev.perSide; draft.unilateral = prev.unilateral;
     draft.reps = prev.reps;
   }
 
-  v.append(el('div', { class: 'row spread', style: 'margin-bottom:4px' },
-    el('h2', { style: 'margin:0' }, ex.name),
-    el('button', { class: 'btn sm', onClick: () => go('exercises/' + ex.id) }, 'Edit')
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
+    el('strong', { class: 'grow', style: 'font-size:1.02rem' }, ex.name),
+    el('button', { class: 'btn sm', onClick: back }, 'Back')
   ));
   v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' → ')));
 
-  // --- what you did last time ---
-  const lt = lastTime(exerciseId, today);
-  if (lt) {
-    const box = el('div', { class: 'lasttime' },
-      el('div', { class: 'tiny faint', style: 'margin-bottom:4px' }, 'Last time · ' + dayLabel(lt.date)));
-    lt.sets.forEach((s, i) => box.append(el('div', {},
-      el('span', { class: 'load' }, formatLoad(s.weight, s.unit, s.perSide)),
-      el('span', { class: 'muted' }, ' × ' + formatReps(s)))));
-    v.append(box);
-  }
-
-  // --- today's sets so far ---
+  // --- today's sets for this person ---
   if (todays.length) {
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'tiny faint', style: 'margin-bottom:4px' }, 'Today so far'));
@@ -619,26 +778,65 @@ function viewLogSet(v, exerciseId) {
     v.append(card);
   }
 
-  // --- the form ---
+  /* ---------------- the form ---------------- */
   const form = el('div', { class: 'card' });
-  const rerender = () => { render(); };
 
-  const weightInput = el('input', { type: 'number', step: '0.5', inputmode: 'decimal', value: draft.weight || '' });
-  const repsInput   = el('input', { type: 'number', inputmode: 'numeric', value: draft.reps || '' });
-  const halfInput   = el('input', { type: 'number', inputmode: 'numeric', value: draft.halfReps || '' });
-  const commentBox  = el('textarea', { placeholder: 'Form, struggle, spotter, banter…' });
+  // Always name the target, in every flow. A label that appears only sometimes
+  // is a label nobody reads — and this is now the only thing carrying it.
+  form.append(el('div', { class: 'forwho' + (onBehalf ? ' other' : '') },
+    el('span', { class: 'tiny' }, 'Adding a set for'),
+    el('strong', {}, p.name),
+    onBehalf ? el('span', { class: 'tiny' }, `· not ${state.owner}`) : null
+  ));
 
+  const weight = stepper({
+    value: draft.weight, step: stepFor(draft.unit), min: 0, decimals: 2,
+    onChange: (val) => { draft.weight = val; },
+  });
+  const reps = stepper({
+    value: draft.reps, step: 1, min: 0, decimals: 0,
+    onChange: (val) => { draft.reps = val; },
+  });
+
+  // Changing unit retunes the step and snaps the current value onto its grid,
+  // so switching kg -> lb cannot leave you on 17.5 lb.
   const unitOpts = (ex.allowedUnits || ['block']).map((u) => ({ key: u, label: UNITS[u].label }));
   const unitRow = el('div');
   const paintUnits = () => {
-    clear(unitRow).append(segmented(unitOpts, draft.unit, (k) => { draft.unit = k; paintUnits(); }));
+    clear(unitRow).append(segmented(unitOpts, draft.unit, (k) => {
+      draft.unit = k;
+      weight.setStep(stepFor(k));
+      const snapped = snapTo(weight.get(), k);
+      weight.set(snapped);
+      draft.weight = snapped;
+      paintUnits();
+    }));
   };
   paintUnits();
+
+  form.append(
+    el('div', { class: 'row' },
+      el('div', { class: 'grow' }, field('Weight', weight.node)),
+      el('div', { class: 'grow' }, field('Unit', unitRow))
+    ),
+    field('Reps', reps.node)
+  );
+
+  /* ---------------- extras, collapsed ----------------
+     Most sets are weight and reps only. Everything below is occasional, so it
+     hides behind one tap and the common case becomes two taps and Save.
+     Expanded state is remembered per exercise: a machine where you always leave
+     a comment stays open. */
+  const moreKey = 'gn.more.' + exerciseId;
+  let moreOpen = localStorage.getItem(moreKey) === '1';
+
+  const halfInput  = el('input', { type: 'number', inputmode: 'numeric', value: draft.halfReps || '' });
+  const commentBox = el('textarea', { placeholder: 'Form, struggle, spotter, banter…' });
 
   const supportRow = el('div');
   const paintSupport = () => {
     clear(supportRow).append(segmented(
-      Object.values(SUPPORT).map((s) => ({ key: s.key, label: s.label })),
+      Object.values(SUPPORT).map((x) => ({ key: x.key, label: x.label })),
       draft.support, (k) => { draft.support = k; paintSupport(); }));
   };
   paintSupport();
@@ -652,99 +850,96 @@ function viewLogSet(v, exerciseId) {
     return el('div', { class: 'grow' }, btn, hint ? el('div', { class: 'tiny faint', style: 'margin-top:3px' }, hint) : null);
   };
 
-  form.append(
-    el('div', { class: 'row' },
-      el('div', { class: 'grow' }, field('Weight', weightInput)),
-      el('div', { class: 'grow' }, field('Unit', unitRow))
-    ),
-    el('div', { class: 'row' },
-      el('div', { class: 'grow' }, field('Reps', repsInput)),
-      el('div', { class: 'grow' }, field('Half reps', halfInput))
-    ),
-    el('div', { class: 'row', style: 'margin-bottom:12px' },
-      toggle('kg/side', 'perSide', 'weight per side'),
-      toggle('Each side', 'unilateral', 'reps per side'),
-      toggle('Warm-up', 'warmup', 'excluded from PRs')
-    ),
-    field('Support', supportRow),
-    field('Comment', commentBox)
-  );
-
   // --- drop sets: "#8 for 7 THEN #5 for 8" is one set, not two ---
-  // Each drop carries its own unit. On a dumbbell exercise you can genuinely
-  // drop from 20 lb to 7.5 kg, because that's what's on the rack.
   const dropsWrap = el('div');
   const paintDrops = () => {
     clear(dropsWrap);
-
     draft.drops.forEach((d, i) => {
-      const unitPicker = segmented(unitOpts, d.unit, (k) => { d.unit = k; paintDrops(); });
-
-      dropsWrap.append(el('div', {
-        class: 'card', style: 'background:var(--panel-2);margin-bottom:10px'
-      },
+      dropsWrap.append(el('div', { class: 'card', style: 'background:var(--panel-2);margin-bottom:10px' },
         el('div', { class: 'row spread', style: 'margin-bottom:8px' },
           el('span', { class: 'tiny faint' }, `Drop ${i + 1}`),
           el('button', { class: 'btn sm danger', onClick: () => { draft.drops.splice(i, 1); paintDrops(); } }, '✕')
         ),
         el('div', { class: 'row' },
-          el('div', { class: 'grow' }, field('Weight', el('input', {
-            type: 'number', step: '0.5', inputmode: 'decimal', value: d.weight || '',
-            onInput: (e) => { d.weight = parseFloat(e.target.value) || 0; } }))),
-          el('div', { class: 'grow' }, field('Unit', unitPicker))
+          el('div', { class: 'grow' }, field('Weight', stepper({
+            value: d.weight, step: stepFor(d.unit), min: 0, decimals: 2,
+            onChange: (val) => { d.weight = val; },
+          }).node)),
+          el('div', { class: 'grow' }, field('Unit',
+            segmented(unitOpts, d.unit, (k) => { d.unit = k; paintDrops(); })))
         ),
         el('div', { class: 'row' },
-          el('div', { class: 'grow' }, field('Reps', el('input', {
-            type: 'number', inputmode: 'numeric', value: d.reps || '',
-            onInput: (e) => { d.reps = parseInt(e.target.value) || 0; } }))),
+          el('div', { class: 'grow' }, field('Reps', stepper({
+            value: d.reps, step: 1, min: 0, decimals: 0,
+            onChange: (val) => { d.reps = val; },
+          }).node)),
           el('div', { class: 'grow' }, field('Half reps', el('input', {
             type: 'number', inputmode: 'numeric', value: d.halfReps || '',
             onInput: (e) => { d.halfReps = parseInt(e.target.value) || 0; } })))
         )
       ));
     });
-
     dropsWrap.append(el('button', { class: 'btn sm', onClick: () => {
-      // Inherit the unit from the last drop, or the parent set if this is the first.
       const last = draft.drops[draft.drops.length - 1];
       draft.drops.push({ weight: 0, unit: last ? last.unit : draft.unit, reps: 0, halfReps: 0 });
       paintDrops();
     } }, '+ Drop'));
   };
   paintDrops();
-  form.append(el('h3', {}, 'Drop set'), dropsWrap);
+
+  const moreBody = el('div', { class: 'more-body' + (moreOpen ? ' open' : '') },
+    field('Half reps', halfInput),
+    el('div', { class: 'row', style: 'margin-bottom:12px' },
+      toggle('kg/side', 'perSide', 'weight per side'),
+      toggle('Each side', 'unilateral', 'reps per side'),
+      toggle('Warm-up', 'warmup', 'excluded from PRs')
+    ),
+    field('Support', supportRow),
+    field('Comment', commentBox),
+    el('h3', {}, 'Drop set'),
+    dropsWrap
+  );
+
+  const moreBtn = el('button', { class: 'more-toggle' + (moreOpen ? ' open' : ''), onClick: () => {
+    moreOpen = !moreOpen;
+    moreBody.classList.toggle('open', moreOpen);
+    moreBtn.classList.toggle('open', moreOpen);
+    moreBtn.textContent = moreOpen ? 'Fewer options' : 'More options';
+    try { localStorage.setItem(moreKey, moreOpen ? '1' : '0'); } catch {}
+  } }, moreOpen ? 'Fewer options' : 'More options');
+
+  form.append(moreBtn, moreBody);
 
   form.addEventListener('input',  () => { formDirty = true; });
   form.addEventListener('change', () => { formDirty = true; });
   v.append(form);
 
-  v.append(el('button', { class: 'btn primary block', onClick: async () => {
-    const weight = parseFloat(weightInput.value);
-    const reps = parseInt(repsInput.value);
-    if (isNaN(weight) || isNaN(reps) || reps <= 0) return toast('Need a weight and reps');
+  v.append(busyButton('Save set', 'Adding…', 'btn primary block', async () => {
+    const w = weight.get();
+    const r = reps.get();
+    if (r <= 0) return toast('Need at least one rep');
 
-    // Every single time, by request: post-workout nobody reads carefully, and
-    // a set written to the wrong person is worse than one extra tap.
-    if (isOnBehalf() && !(await confirmOnBehalf(p.name, state.owner))) return;
-
-    const payload = {
+    // No confirm here: the target came from the URL and is named at the top of
+    // this form, so there is no silent global selection left to get wrong.
+    await S.addSet({
       ...draft,
       profileId: p.id,
       exerciseId: ex.id,
       date: today,
-      weight,
-      reps,
+      weight: w,
+      reps: r,
       halfReps: parseInt(halfInput.value) || 0,
       comment: commentBox.value.trim(),
       enteredBy: state.owner || null,
+      loggedAt: Date.now(),   // client clock: correct offline, and instant
       drops: draft.drops.filter((d) => d.reps > 0),
-    };
-    await S.addSet(payload);
-    toast('Set logged');
-    rerender();
-  } }, 'Save set'));
+    });
+    toast(`Set logged for ${p.name}`);
+    formDirty = false;
+    back();
+  }));
 
-  v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: () => go('log') }, 'Done'));
+  v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: back }, 'Done'));
 }
 
 /* ============================ history ============================ */
@@ -939,13 +1134,13 @@ function viewExerciseEditor(v, id) {
     el('div', { class: 'tiny faint', style: 'margin-top:4px' }, 'Comma separated. Old spellings from the chat log go here.'));
 
   v.append(el('div', { style: 'height:18px' }));
-  v.append(el('button', { class: 'btn primary block', onClick: async () => {
+  v.append(busyButton(isNew ? 'Create' : 'Save', 'Saving…', 'btn primary block', async () => {
     ex.name = nameInput.value.trim();
     if (!ex.name) return toast('Name required');
     ex.aliases = aliasInput.value.split(',').map((s) => s.trim()).filter(Boolean);
-    if (isNew) { const newId = await S.addExercise(ex); toast('Created'); go('set/' + newId); }
+    if (isNew) { const newId = await S.addExercise(ex); toast('Created'); go('ex/' + newId); }
     else { await S.saveExercise(id, ex); toast('Saved'); history.back(); }
-  } }, isNew ? 'Create' : 'Save'));
+  }));
 
   if (!isNew) {
     v.append(el('button', { class: 'btn danger block', style: 'margin-top:8px', onClick: async () => {
@@ -1008,7 +1203,7 @@ function showUnlock(message) {
 
   clear(viewEl()).append(el('div', { style: 'max-width:380px;margin:12vh auto 0;text-align:center' },
     el('div', { style: 'font-size:2.6rem' }, '🏋️'),
-    el('h2', { style: 'margin:14px 0 6px' }, 'Spotter'),
+    el('h2', { style: 'margin:14px 0 6px' }, 'BroSplit'),
     el('p', { class: 'muted tiny', style: 'margin:0 0 20px' },
       'This device needs the access key once. Paste it and it stays in this browser.'),
     el('p', { class: 'tiny faint', style: 'margin:-12px 0 16px' },
@@ -1023,6 +1218,7 @@ function showUnlock(message) {
 /* ============================ boot ============================ */
 
 async function boot() {
+  paintSplashVersion();
   paintSync(navigator.onLine);
 
   const key = getStoredKey();
@@ -1047,7 +1243,14 @@ async function boot() {
   S.watchProfiles((rows) => {
     state.profiles = rows;
     state.loaded.profiles = true;
-    if (!state.profileId && rows.length) setProfile(rows[0].id);
+
+    // state.sets holds the full history of the ACTIVE profile only, and
+    // lastTime() reads it. So "me" must be the active profile by default, or
+    // my own history is invisible on my own side of the exercise view.
+    const mine = rows.find((r) => r.name === state.owner);
+    const stored = rows.some((r) => r.id === state.profileId);
+    if (mine && !stored) setProfile(mine.id);
+    else if (!stored && rows.length) setProfile(rows[0].id);
     else renderFromData();
   });
 

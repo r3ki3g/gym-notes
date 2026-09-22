@@ -16,6 +16,22 @@ export const UNITS = {
 };
 
 export const UNIT_KEYS = Object.keys(UNITS);
+
+/**
+ * Stepper increment per unit, taken from every weight in the WhatsApp export:
+ *   blocks  -> all integers (#0 … #17)
+ *   kg      -> all multiples of 2.5 (the one 17.4 is a typo for 17.5)
+ *   lb      -> all multiples of 5, no exceptions
+ * A flat step would be wrong for two of the three.
+ */
+export const STEPS = { block: 1, kg: 2.5, lb: 5 };
+export const stepFor = (unit) => STEPS[unit] ?? 1;
+
+/** Snap to the unit's grid so +/- never produces 17.4 from a typed 17.4. */
+export function snapTo(value, unit) {
+  const step = stepFor(unit);
+  return Math.round(value / step) * step;
+}
 const LB_PER_KG = 1 / UNITS.lb.perKg; // 2.2046226218
 
 export function toKg(value, unit) {

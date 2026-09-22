@@ -70,34 +70,95 @@ export function promptSheet(title, initial = '', placeholder = '') {
 }
 
 /**
- * Shown before every set logged on someone else's behalf. Deliberately blunt and
- * one big tap: it fires post-workout when nobody is reading carefully.
- * Cancel stays small — it is the rare path, but it has to exist or the whole
- * confirmation is theatre.
+ * A button that cannot be double-submitted.
+ *
+ * Found in real use: tapping "Save set" twice on a slow connection wrote two
+ * records. Disabling alone is not enough — the handler is async, so the second
+ * tap can land before the DOM updates. Hence the `busy` flag as well.
+ *
+ * Reverts label and state afterwards, but only if the node is still in the
+ * document: most of these handlers trigger a re-render that replaces it.
  */
-export function confirmOnBehalf(targetName, ownerName) {
-  return new Promise((resolve) => {
-    const dlg = el('dialog', {},
-      el('div', { class: 'sheet', style: 'text-align:center' },
-        el('div', { style: 'font-size:2.2rem;line-height:1' }, '⚠️'),
-        el('div', { class: 'tiny faint', style: 'margin:14px 0 2px;letter-spacing:.08em' }, 'LOGGING FOR'),
-        el('div', { style: 'font-size:1.9rem;font-weight:800;color:var(--gold);line-height:1.1' }, targetName),
-        el('div', { class: 'muted', style: 'margin-top:10px;font-size:.9rem' },
-          ownerName ? `Not you — you are ${ownerName}.` : 'Check this is the right person.'),
-        el('button', {
-          class: 'btn primary block big', style: 'margin-top:20px',
-          onClick: () => { dlg.close(); resolve(true); },
-        }, `OK — log for ${targetName}`),
-        el('button', {
-          class: 'btn block', style: 'margin-top:10px;background:none;border:0;color:var(--dim)',
-          onClick: () => { dlg.close(); resolve(false); },
-        }, 'Cancel')
-      )
-    );
-    dlg.addEventListener('close', () => dlg.remove());
-    document.body.append(dlg);
-    dlg.showModal();
+export function busyButton(label, busyLabel, cls, fn) {
+  let busy = false;
+  const btn = el('button', { class: cls, onClick: async () => {
+    if (busy) return;
+    busy = true;
+    btn.disabled = true;
+    btn.textContent = busyLabel;
+    try {
+      await fn();
+    } catch (err) {
+      console.error(err);
+      toast('Could not save — try again');
+    } finally {
+      busy = false;
+      if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+    }
+  } }, label);
+  return btn;
+}
+
+/**
+ * [–] value [+] with the value still typeable.
+ *
+ * Long-press repeats, accelerating after the first second — going from 20 kg to
+ * 60 kg should not be sixteen taps.
+ *
+ * Returns { node, get, set, setStep } so the caller can retune the step when the
+ * unit changes without rebuilding anything.
+ */
+export function stepper({ value = 0, step = 1, min = 0, max = Infinity, decimals = 1, onChange } = {}) {
+  let step_ = step;
+
+  const input = el('input', {
+    type: 'number', inputmode: 'decimal', class: 'step-value',
+    value: value || value === 0 ? String(value) : '',
   });
+
+  const read  = () => { const n = parseFloat(input.value); return isNaN(n) ? 0 : n; };
+  const clean = (n) => Math.min(max, Math.max(min, parseFloat(n.toFixed(decimals))));
+
+  function write(n) {
+    const v = clean(n);
+    input.value = String(v);
+    onChange?.(v);
+    return v;
+  }
+
+  // One press = one nudge; hold = repeat. The timers are cleared on every exit
+  // path, including pointercancel, or a dragged thumb leaves it ticking.
+  function bind(btn, dir) {
+    let hold, repeat;
+    const stop = () => { clearTimeout(hold); clearInterval(repeat); hold = repeat = null; };
+
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      write(read() + dir * step_);
+      hold = setTimeout(() => {
+        let ticks = 0;
+        repeat = setInterval(() => {
+          ticks++;
+          write(read() + dir * step_ * (ticks > 12 ? 4 : ticks > 5 ? 2 : 1));
+        }, 110);
+      }, 450);
+    });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, stop);
+  }
+
+  const minus = el('button', { type: 'button', class: 'step-btn', 'aria-label': 'decrease' }, '−');
+  const plus  = el('button', { type: 'button', class: 'step-btn', 'aria-label': 'increase' }, '+');
+  bind(minus, -1);
+  bind(plus, +1);
+
+  input.addEventListener('change', () => write(read()));
+
+  return {
+    node: el('div', { class: 'stepper' }, minus, input, plus),
+    get: read,
+    set: (n) => { input.value = String(clean(n)); },
+    setStep: (n) => { step_ = n; },
+  };
 }
 
 /** Segmented picker. options: [{key,label}] */

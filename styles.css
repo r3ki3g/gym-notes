@@ -28,7 +28,7 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
 }
 .brandrow{display:flex;align-items:center;gap:8px}
 .brand{
-  font-size:1.06rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  font-size:1.06rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
   flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   background:linear-gradient(95deg,var(--accent),#e0a3ff 55%,var(--gold));
   -webkit-background-clip:text;background-clip:text;color:transparent;
@@ -59,11 +59,11 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
   padding-bottom:env(safe-area-inset-bottom);
 }
 #tabs button{
+  position:relative;
   background:none;border:0;color:var(--faint);padding:9px 4px;
   display:flex;flex-direction:column;align-items:center;gap:3px;font-size:.66rem;letter-spacing:.03em;
 }
 #tabs button span{font-size:1.22rem;line-height:1}
-#tabs button{position:relative}
 .tab-dot{
   position:absolute;top:7px;right:calc(50% - 15px);
   width:8px;height:8px;border-radius:50%;background:var(--gold);
@@ -86,8 +86,102 @@ input,select,textarea{
   padding:10px 11px;width:100%;min-height:var(--tap);
 }
 textarea{min-height:64px;resize:vertical}
-input:focus,select,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
 select{min-height:var(--tap)}
+/* ---------- stepper ---------- */
+.stepper{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.step-btn{
+  flex:none;width:44px;background:var(--panel-2);border:0;color:var(--text);
+  font-size:1.35rem;line-height:1;font-weight:500;touch-action:none;user-select:none;
+}
+.step-btn:active{background:var(--accent);color:var(--accent-ink)}
+.stepper .step-value{
+  flex:1;min-width:0;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);
+  border-radius:0;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;
+  -moz-appearance:textfield;
+}
+.stepper .step-value::-webkit-outer-spin-button,
+.stepper .step-value::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+/* ---------- collapsible extras ---------- */
+.more-toggle{
+  width:100%;background:none;border:0;border-top:1px solid var(--line);
+  color:var(--dim);font-size:.8rem;padding:11px 0 3px;margin-top:4px;text-align:center;
+}
+.more-toggle::after{content:" ▾"}
+.more-toggle.open::after{content:" ▴"}
+.more-body{display:none;padding-top:10px}
+.more-body.open{display:block}
+
+/* ---------- freshness ----------
+   Finite iteration counts so the glow stops on its own with no JS timer, and a
+   negative animation-delay starts it partway through for a set that is already
+   a few seconds old. */
+@keyframes freshOther{
+  0%,100%{box-shadow:inset 0 0 0 0 rgba(240,180,41,0); background:transparent}
+  50%    {box-shadow:inset 3px 0 0 0 var(--gold);      background:rgba(240,180,41,.07)}
+}
+@keyframes freshOwn{
+  0%  {box-shadow:inset 3px 0 0 0 var(--accent); background:rgba(168,85,247,.14)}
+  100%{box-shadow:inset 0 0 0 0 rgba(168,85,247,0); background:transparent}
+}
+.set-line.fresh-other{animation:freshOther 2s ease-in-out 15 both}
+.set-line.fresh-own{animation:freshOwn .9s ease-out 1 both}
+@media (prefers-reduced-motion:reduce){
+  .set-line.fresh-other{animation:none;box-shadow:inset 3px 0 0 0 var(--gold);background:rgba(240,180,41,.07)}
+  .set-line.fresh-own{animation:none}
+}
+
+/* ---------- two-sided exercise view ---------- */
+.sides{display:flex;gap:9px;align-items:flex-start}
+.side{
+  flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:10px;
+}
+.side-head{
+  display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;
+  padding-bottom:7px;margin-bottom:5px;border-bottom:1px solid var(--line);
+}
+.side-who{font-weight:700;font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-tag{font-size:.6rem;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.side.me .side-tag{color:var(--accent)}
+.side-set{
+  display:flex;gap:6px;align-items:baseline;font-size:.8rem;
+  padding:4px 0 4px 7px;margin-left:-7px;
+  border-bottom:1px solid rgba(255,255,255,.04);
+}
+.side-set:last-of-type{border-bottom:0}
+.side-set .n{color:var(--faint);font-size:.68rem;min-width:12px;font-variant-numeric:tabular-nums}
+.side-set .load{font-weight:700;font-variant-numeric:tabular-nums}
+.side-set.fresh-other{box-shadow:inset 3px 0 0 0 var(--gold);background:rgba(240,180,41,.07);border-radius:3px}
+.side-set.fresh-own{box-shadow:inset 3px 0 0 0 var(--accent);border-radius:3px}
+.side-empty{color:var(--faint);font-size:.75rem;padding:8px 0;text-align:center}
+/* The right column's own header. Styled to match the plain name on the left —
+   same weight and size — so the two columns read as equals. Only the chevron
+   marks it as a control; an accent border made it look like the active or
+   more important side. */
+.side-pick{
+  width:100%;min-height:26px;padding:1px 20px 1px 0;
+  background:transparent;border:0;
+  color:var(--text);font-weight:700;font-size:.86rem;
+  appearance:none;-webkit-appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+  background-position:calc(100% - 10px) 54%,calc(100% - 5px) 54%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat;
+}
+.side-pick:focus{outline:none}
+.side-pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+.side-last{margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}
+.side-last-when{font-size:.65rem;color:var(--faint);letter-spacing:.03em;margin-bottom:3px}
+.side-last-set{display:flex;gap:5px;align-items:baseline;font-size:.76rem;color:var(--dim)}
+.side-last-set .load{font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
+
+.side-add{
+  width:100%;margin-top:8px;background:var(--panel-2);border:1px solid var(--line);
+  color:var(--accent);border-radius:8px;min-height:40px;font-weight:600;font-size:.84rem;
+}
+
 label.field{display:block;margin-bottom:10px}
 label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em}
 
@@ -113,18 +207,38 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .pill.primary-muscle{border-color:var(--accent);color:var(--accent)}
 .pill.warmup{border-color:#3f3216;color:var(--warn)}
 /* entered by the other person, on this profile's behalf */
+.forwho{
+  display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;
+  margin:-3px -3px 13px;padding:8px 11px;border-radius:9px;
+  background:var(--panel-2);border:1px solid var(--line);
+}
+.forwho .tiny{color:var(--faint);font-size:.72rem}
+.forwho strong{font-size:.95rem}
+.forwho.other{border-color:#6b5312;background:var(--gold-dim)}
+.forwho.other strong{color:var(--gold)}
+.forwho.other .tiny{color:#b99a4e}
+
 .pill.by{border-color:var(--gold);color:var(--gold);background:var(--gold-dim);font-weight:600}
 
 /* the profile chip goes gold whenever you are logging for someone else */
-.chip.other{border-color:#6b5312;color:var(--gold);background:transparent}
-.chip.other::after{color:var(--gold)}
-.onbehalf{
-  background:var(--gold-dim);border:1px solid var(--gold);color:var(--gold);
-  border-radius:9px;padding:8px 12px;margin-bottom:12px;font-size:.84rem;font-weight:600;
+.chip.viewing{border-color:#43395c;color:var(--text);background:transparent}
+.chip.viewing::after{color:var(--dim)}
+.viewing-note{
+  background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 9px 9px 0;padding:8px 12px;margin-bottom:12px;
+  font-size:.81rem;color:var(--dim);
 }
+.pill.viewing-pill{border-color:var(--accent);color:var(--accent);flex:none}
 
 /* ---------- log ---------- */
-.set-line{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--line);align-items:baseline}
+/* padding-left is a lane for the freshness bar, present always so a row does
+   not jump sideways when the glow expires; the negative margin keeps the text
+   aligned with the card around it. */
+.set-line{
+  display:flex;gap:9px;align-items:baseline;
+  padding:8px 0 8px 8px;margin-left:-8px;
+  border-bottom:1px solid var(--line);
+}
 .set-line:last-child{border-bottom:0}
 .set-no{color:var(--faint);font-size:.76rem;min-width:22px;font-variant-numeric:tabular-nums}
 .set-main{flex:1;min-width:0}
@@ -195,7 +309,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 #splash.gone{opacity:0;visibility:hidden;pointer-events:none}
 
 .splash-name{font-size:1.25rem;font-weight:800;
-  letter-spacing:.24em;text-transform:uppercase;
+  letter-spacing:.14em;text-transform:uppercase;
   background:linear-gradient(100deg,
     var(--accent) 0%, #e0a3ff 28%,
     #fff3c4 44%, var(--gold) 52%,   /* the shine band */
@@ -247,6 +361,19 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
   letter-spacing:.05em;min-height:1.1em;
 }
 .splash-stage.failed{color:var(--bad)}
+.splash-hint{
+  margin-top:10px;max-width:290px;text-align:center;
+  font-size:.68rem;line-height:1.5;color:var(--faint);
+}
+.splash-fix{
+  background:var(--accent);color:var(--accent-ink);border:0;border-radius:9px;
+  padding:11px 18px;font-weight:700;font-size:.85rem;
+}
+.splash-fix[disabled]{opacity:.6}
+.splash-version{
+  position:absolute;bottom:calc(26px + env(safe-area-inset-bottom));
+  font-size:.66rem;color:var(--faint);letter-spacing:.1em;opacity:.65;
+}
 
 @media (prefers-reduced-motion:reduce){
   .splash-name,.splash-pro::after,.splash-progress::after{animation:none}

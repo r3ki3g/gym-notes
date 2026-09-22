@@ -1,0 +1,9 @@
+{
+  "name": "brosplit",
+  "private": true,
+  "type": "module",
+  "description": "Gym log SPA. No build step — package.json exists so Node can load js/*.js as ES modules for tests.",
+  "scripts": {
+    "test": "node test/run.mjs"
+  }
+}

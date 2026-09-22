@@ -92,33 +92,44 @@ export const addSet = async (payload) =>
 export const saveSet   = (id, patch) => updateDoc(doc(db, COL.sets, id), patch);
 export const deleteSet = (id) => deleteDoc(doc(db, COL.sets, id));
 
+/** YYYY-MM-DD, n days back from today. Cutoff for the shared history window. */
+export function daysAgoKey(n, from = new Date()) {
+  const d = new Date(from);
+  d.setDate(d.getDate() - n);
+  return todayKey(d);
+}
+
 /**
- * Watches every set logged today, across all profiles, and reports only the ones
- * that appear after the subscription settles.
+ * Every set from EVERY profile within the recent window.
  *
- * Tracks seen IDs rather than trusting docChanges(): with the offline cache a
- * snapshot arrives from disk first and again from the server, and both report
- * the same documents as "added". Comparing IDs makes a double delivery harmless.
+ * Replaces an earlier today-only subscription. "Last time" has to work for both
+ * sides of the exercise view, and only the active profile's full history was
+ * loaded — so the other person's previous numbers were invisible.
+ *
+ * `where('date', '>=', since)` is a single range filter on an ISO date string,
+ * which sorts lexicographically, so no composite index is needed. Bounded on
+ * purpose: unbounded growth was already the one scaling worry in the README.
+ *
+ * Reports `added` as genuinely-new document ids. Tracking ids rather than
+ * trusting docChanges() matters because the offline cache delivers a snapshot
+ * from disk and again from the server, both marking the same docs "added".
  */
-export function watchActivity(date, onChange) {
+export function watchRecent(since, onChange) {
   let stop = () => {};
   const seen = new Set();
   let primed = false;
 
   ready().then(() => {
     stop = onSnapshot(
-      query(collection(db, COL.sets), where('date', '==', date)),
+      query(collection(db, COL.sets), where('date', '>=', since)),
       (snap) => {
         const all = rows(snap);
         const fresh = snap.docs.filter((d) => !seen.has(d.id)).map((d) => ({ id: d.id, ...d.data() }));
         snap.docs.forEach((d) => seen.add(d.id));
-
-        // The first delivery is existing history, so it populates the feed but
-        // must not fire a toast for every set already logged today.
         onChange({ all, added: primed ? fresh : [] });
         primed = true;
       },
-      (err) => console.error('[activity] subscription failed', err)
+      (err) => console.error('[recent] subscription failed', err)
     );
   });
   return () => stop();

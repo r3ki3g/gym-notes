@@ -1,11 +1,15 @@
-# Spotter
+# BroSplit
 
 A single-page gym log for Prabhashwara and Chamuth, replacing the WhatsApp group.
 No build step, no backend — static files on GitHub Pages, data in Firestore.
 
-The name is a double meaning: you spot each other on the bar, and you spot each
-other's numbers. Change it in `index.html` (`<title>` and `.brand`) if something
-better turns up.
+The name is the joke: a "bro split" is a training split, and it is also two bros
+splitting the work of logging. Renamed from *Spotter* on 09/22/26 — that word is
+singular and one-directional (one person spots, the other lifts), which only
+described half of what this does.
+
+To rename again: `<title>`, `.brand` and `.splash-name` in `index.html`, the
+unlock heading and the Settings footer in `js/app.js`.
 
 ## Two lists, two jobs
 
@@ -89,7 +93,13 @@ occasionally. Keep it somewhere you can reach from your phone.
 **Profiles → Forget key on this device** clears it deliberately — use that before
 handing your phone to anyone.
 
-Local dev: `python3 -m http.server 8777` then open `http://localhost:8777`.
+Local dev: `python3 serve.py` then open `http://localhost:8777`.
+
+Use `serve.py`, not `python3 -m http.server` — the latter sends no
+`Cache-Control`, so the browser will happily run a stale module against fresh
+ones and produce errors about functions that plainly exist on disk.
+
+Tests: `npm test`.
 
 ## Layout
 
@@ -256,11 +266,12 @@ synonym table in `js/search.js`.
 
 ## Known limits
 
-- **Read volume grows unbounded.** The app subscribes to every set for the active
-  profile. At roughly 60 sets/session, twice a week, that's about 6,240 sets/year
-  — a cold load of 6,240 reads, or 12.5% of the free tier's 50,000/day. The
-  offline cache makes every load after the first nearly free, so this is fine for
-  now, but if it ever bites, bound the query to the last 120 days.
+- **Read volume is bounded at 90 days** for the shared cross-profile window
+  (`HISTORY_DAYS` in `js/app.js`). The active profile's own history is still
+  loaded in full for the History tab, so that part remains unbounded — roughly
+  6,240 sets/year at 60 sets/session twice weekly, or 12.5% of the free tier's
+  50,000 reads/day on a cold load. The offline cache makes later loads nearly
+  free.
 - **The key is a shared bearer token.** Anyone holding it has full read/write.
   That is the accepted trade for not wanting a sign-in screen; Google Sign-In with
   the two UIDs pinned in the rules is the stronger option if that ever changes.

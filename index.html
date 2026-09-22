@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#08060d">
-<title>Spotter</title>
+<title>BroSplit</title>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🟣</text></svg>">
 </head>
@@ -12,15 +12,16 @@
   <!-- Lives in the markup, not in JS, so it paints on the very first frame —
        before the module graph loads and well before anonymous auth returns. -->
   <div id="splash">
-    <div class="splash-name">Spotter</div>
+    <div class="splash-name">BroSplit</div>
     <div class="splash-pro">PRO</div>
     <div class="splash-progress"></div>
     <div class="splash-stage" id="splash-stage">starting…</div>
+    <div class="splash-version" id="splash-version"></div>
   </div>
 
   <header id="topbar">
     <div class="brandrow">
-      <span class="brand">Spotter</span>
+      <span class="brand">BroSplit</span>
       <span class="pro">PRO</span>
       <span style="flex:1"></span>
       <button id="profile-switch" class="chip" type="button">…</button>
@@ -40,6 +41,79 @@
 
   <div id="toast" class="toast" role="status"></div>
 
+  <!-- Runs before the module graph. A failed import throws before any of our own
+       code executes, so app.js can never report it — twice that showed up as a
+       splash which simply never finished. This surfaces it AND offers a real fix:
+       a stale module cannot be evicted by a normal reload, because the cached
+       entry was stored before no-store headers existed. fetch(cache:'reload')
+       bypasses the HTTP cache and rewrites each entry, so the reload after it
+       gets current code. -->
+  <script>
+    (function () {
+      var MODULES = [
+        'js/app.js', 'js/firebase.js', 'js/store.js', 'js/sides.js',
+        'js/search.js', 'js/units.js', 'js/ui.js', 'js/notify.js',
+        'js/seed.js', 'js/version.js'
+      ];
+      var shown = false;
+
+      function show(msg) {
+        if (shown) return;          // one report, however many errors cascade
+        shown = true;
+
+        var stage = document.getElementById('splash-stage');
+        var bar = document.querySelector('.splash-progress');
+        if (bar) bar.style.display = 'none';
+        if (!stage) return;
+
+        stage.className = 'splash-stage failed';
+        stage.textContent = msg;
+
+        var wrap = document.createElement('div');
+        wrap.className = 'splash-hint';
+
+        // Guard against a reload loop when the error is not cache-related.
+        if (sessionStorage.getItem('gn.refetched') === '1') {
+          wrap.textContent = 'Already refetched, so this is not a stale file. '
+            + 'Check the console for the underlying error.';
+          stage.parentNode.insertBefore(wrap, stage.nextSibling);
+          return;
+        }
+
+        var btn = document.createElement('button');
+        btn.className = 'splash-fix';
+        btn.textContent = 'Reload with fresh files';
+        btn.onclick = function () {
+          btn.disabled = true;
+          btn.textContent = 'Refetching…';
+          sessionStorage.setItem('gn.refetched', '1');
+          Promise.all(MODULES.map(function (u) {
+            return fetch(u, { cache: 'reload' }).catch(function () {});
+          })).then(function () { location.reload(); });
+        };
+
+        wrap.appendChild(btn);
+        var note = document.createElement('div');
+        note.style.marginTop = '9px';
+        note.textContent = 'Or hard-refresh: Cmd/Ctrl + Shift + R';
+        wrap.appendChild(note);
+        stage.parentNode.insertBefore(wrap, stage.nextSibling);
+      }
+
+      window.addEventListener('error', function (e) {
+        show(e.message || 'Failed to load the app');
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        show((e.reason && e.reason.message) || 'Startup failed');
+      });
+      // A clean start means whatever we refetched worked; drop the guard.
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (!shown) sessionStorage.removeItem('gn.refetched');
+        }, 3000);
+      });
+    })();
+  </script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
