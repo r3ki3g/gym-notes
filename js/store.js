@@ -12,6 +12,7 @@ export const COL = {
   profiles:  'profiles',
   exercises: 'exercises',
   sets:      'sets',
+  usage:     'usage',
 };
 
 const rows = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -46,6 +47,8 @@ export function blankExercise() {
     defaultUnit: 'block',
     perSideDefault: false,    // weight is per side (Z-bar, bench, leg press)
     unilateralDefault: false, // reps are per side (single-arm work)
+    metric: 'reps',           // 'reps' | 'time' — planks are counted in seconds
+    bodyweight: false,        // no external load, so hide the weight field
     aliases: [],
     notes: '',
   };
@@ -67,8 +70,13 @@ export function blankSet(exercise) {
     unit: exercise?.defaultUnit || 'block',
     perSide: !!exercise?.perSideDefault,
     unilateral: !!exercise?.unilateralDefault,
+    // Copied onto the set, like `unit`, so changing the exercise later cannot
+    // rewrite how an existing set was counted.
+    metric: exercise?.metric === 'time' ? 'time' : 'reps',
+    bodyweight: !!exercise?.bodyweight,
     reps: 0,
     halfReps: 0,
+    seconds: 0,
     support: 'none',
     warmup: false,
     comment: '',
@@ -134,6 +142,17 @@ export function watchRecent(since, onChange) {
   });
   return () => stop();
 }
+
+/* ---------- usage ---------- */
+
+/**
+ * One document per app-open, merged into repeatedly. `merge` so the first flush
+ * creates it and later ones only move the fields that changed — appending a
+ * document per tick would exhaust the daily write quota from a single forgotten
+ * open tab. See the note at the top of js/usage.js.
+ */
+export const upsertUsage = (id, data) =>
+  setDoc(doc(db, COL.usage, id), data, { merge: true });
 
 /* ---------- seeding ---------- */
 export async function seedExercises(list) {

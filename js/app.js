@@ -4,9 +4,11 @@ import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, MUSCLES } from './search.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
-import { UNITS, formatLoad, formatReps, setVolumeKg, SUPPORT, stepFor, snapTo } from './units.js';
-import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper } from './ui.js';
+import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatDuration, setVolumeKg,
+         SUPPORT, METRICS, TIME_STEP, stepFor, snapTo } from './units.js';
+import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper, fmtTime, fmtSpan } from './ui.js';
 import { VERSION } from './version.js';
+import { parseBrowser, createTracker, sessionId, FLUSH_MS } from './usage.js';
 import { chime, soundOn, setSound, notifOn, setNotif, primeAudio,
          vibrateOn, setVibrate, vibrateSupported, buzzTest } from './notify.js';
 
@@ -70,7 +72,11 @@ function setProfile(id) {
 const route = () => (location.hash || '#/log').slice(2).split('/');
 const go = (path) => { location.hash = '#/' + path; };
 
-window.addEventListener('hashchange', () => { formDirty = false; render(); });
+window.addEventListener('hashchange', () => {
+  formDirty = false;
+  tracker?.screen(route()[0] || 'log');
+  render();
+});
 
 // "5s ago" has to keep counting. Only ticks while the Alerts tab is open, so it
 // costs nothing the rest of the time.
@@ -155,7 +161,7 @@ const splashFailsafe = setTimeout(() => {
 function render() {
   paintTopbar();
   formDirty = false;
-  if (state.loaded.profiles && state.owner) { startRecentWatch(); primeAudio(); }
+  if (state.loaded.profiles && state.owner) { startRecentWatch(); primeAudio(); startUsage(); }
   const v = clear(viewEl());
   const [tab, arg, arg2] = route();
 
@@ -236,6 +242,75 @@ function startRecentWatch() {
   });
 }
 
+/* ============================ usage tracking ============================ */
+
+let tracker = null;
+let usageId = null;
+let usageBrowser = '';
+let usageStartedAt = 0;
+let usageTimer = null;
+
+/**
+ * Flush the accumulated summary. Only ever called while the page is visible, or
+ * once on the way out — never on a timer that keeps firing in the background.
+ */
+async function flushUsage() {
+  if (!tracker || !usageId) return;
+  try {
+    await S.upsertUsage(usageId, {
+      owner: state.owner || null,
+      browser: usageBrowser,
+      version: VERSION,
+      startedAt: usageStartedAt,
+      lastSeenAt: Date.now(),
+      ...tracker.snapshot(),
+    });
+  } catch (err) {
+    // Never let analytics break logging — this is the least important write in
+    // the app and must fail silently.
+    console.warn('[usage] flush failed', err);
+  }
+}
+
+function startUsage() {
+  if (tracker) return;
+
+  // Brave reports a Chrome user-agent with no token of its own; the only signal
+  // is navigator.brave, and it is async, so the label is corrected on arrival.
+  usageBrowser = parseBrowser(navigator.userAgent);
+  navigator.brave?.isBrave?.().then((yes) => {
+    if (yes) usageBrowser = parseBrowser(navigator.userAgent, { brave: true });
+  }).catch(() => {});
+
+  usageId = sessionId(sessionStorage);
+  usageStartedAt = Date.now();
+  tracker = createTracker();
+  tracker.visible(document.visibilityState === 'visible');
+  tracker.screen(route()[0] || 'log');
+
+  // The interval checks visibility rather than being cleared and restarted, so
+  // a hidden tab simply does nothing on each tick.
+  usageTimer = setInterval(() => { if (tracker.isVisible()) flushUsage(); }, FLUSH_MS);
+
+  document.addEventListener('visibilitychange', () => {
+    const visible = document.visibilityState === 'visible';
+    tracker.visible(visible);
+    // Flush on the way out so the tail of a session is not lost.
+    if (!visible) flushUsage();
+  });
+
+  // pagehide is the one that fires reliably on mobile; unload often does not.
+  window.addEventListener('pagehide', () => { tracker.visible(false); flushUsage(); });
+
+  flushUsage();
+}
+
+/**
+ * When a set was logged. `loggedAt` is the client clock, written since 1.1.0;
+ * `createdAt` is the server timestamp and the only thing older sets have.
+ */
+const setTime = (s) => s.loggedAt || stampMs(s.createdAt) || null;
+
 /* ============================ freshness ============================ */
 
 const FRESH_MS = 30000;
@@ -308,7 +383,7 @@ function viewAlerts(v) {
           forWhom ? el('span', { class: 'muted' }, ' for ' + forWhom.name) : null
         ),
         el('div', { class: 'tiny muted', style: 'margin-top:2px' },
-          formatLoad(x.weight, x.unit, x.perSide) + ' × ' + formatReps(x)),
+          formatSetLoad(x) + ' × ' + formatEffort(x)),
         x.comment ? el('div', { class: 'cmt' }, x.comment) : null
       ),
       el('span', { class: 'feed-when' }, timeAgo(ms))
@@ -491,12 +566,12 @@ function setLine(s, index, opts = {}) {
   // Tag only when the typist differs from whose record it is.
   const byOther = s.enteredBy && opts.ownerName && s.enteredBy !== opts.ownerName;
   const sup = SUPPORT[s.support] || SUPPORT.none;
-  const load = el('span', { class: 'load' }, formatLoad(s.weight, s.unit, s.perSide));
+  const load = el('span', { class: 'load' }, formatSetLoad(s));
 
   const main = el('div', { class: 'set-main' },
     el('div', { class: 'row wrap', style: 'gap:6px;align-items:baseline' },
       load,
-      el('span', { class: 'muted' }, 'for ' + formatReps(s)),
+      el('span', { class: 'muted' }, (s.metric === 'time' ? 'for ' : 'for ') + formatEffort(s)),
       s.support !== 'none' ? el('span', { class: 'tiny ' + sup.cls }, sup.label) : null,
       s.warmup ? el('span', { class: 'pill warmup' }, 'warm-up') : null,
       byOther ? el('span', { class: 'pill by' }, 'entered by ' + s.enteredBy) : null
@@ -510,6 +585,11 @@ function setLine(s, index, opts = {}) {
   if (s.comment) main.append(el('div', { class: 'cmt' }, s.comment));
 
   const fresh = freshAttrs(s);
+  if (opts.showTime) {
+    const at = setTime(s);
+    if (at) main.append(el('div', { class: 'set-at' }, fmtTime(at, true)));
+  }
+
   return el('div', { class: 'set-line' + fresh.cls, style: fresh.style || null },
     el('span', { class: 'set-no' }, s.warmup ? 'W' : `${index}.`),
     main,
@@ -560,7 +640,7 @@ function viewLog(v) {
       card.append(setLine(s, n, {
         ownerName: p.name,
         onDelete: async () => {
-          if (await confirmSheet('Delete this set?', formatLoad(s.weight, s.unit, s.perSide) + ' for ' + formatReps(s))) {
+          if (await confirmSheet('Delete this set?', formatSetLoad(s) + ' for ' + formatEffort(s))) {
             await S.deleteSet(s.id); toast('Set deleted');
           }
         }
@@ -655,8 +735,10 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
       const fresh = freshAttrs(x);
       col.append(el('div', { class: 'side-set' + fresh.cls, style: fresh.style || null },
         el('span', { class: 'n' }, x.warmup ? 'W' : String(n)),
-        el('span', { class: 'load' }, formatLoad(x.weight, x.unit, x.perSide)),
-        el('span', { class: 'muted' }, '\u00d7' + x.reps + (x.halfReps ? `+${x.halfReps}h` : '')),
+        el('span', { class: 'load' }, formatSetLoad(x)),
+        el('span', { class: 'muted' }, '\u00d7' + (x.metric === 'time'
+          ? formatDuration(x.seconds)
+          : x.reps + (x.halfReps ? `+${x.halfReps}h` : ''))),
         (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null
       ));
     }
@@ -673,8 +755,10 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
       el('div', { class: 'side-last-when' }, 'last · ' + dayLabel(lt.date)));
     for (const x of lt.sets) {
       box.append(el('div', { class: 'side-last-set' },
-        el('span', { class: 'load' }, formatLoad(x.weight, x.unit, x.perSide)),
-        el('span', { class: 'muted' }, '×' + x.reps + (x.halfReps ? `+${x.halfReps}h` : ''))
+        el('span', { class: 'load' }, formatSetLoad(x)),
+        el('span', { class: 'muted' }, '×' + (x.metric === 'time'
+          ? formatDuration(x.seconds)
+          : x.reps + (x.halfReps ? `+${x.halfReps}h` : '')))
       ));
     }
     col.append(box);
@@ -757,7 +841,7 @@ function viewLogSet(v, exerciseId, profileId) {
   if (prev) {
     draft.weight = prev.weight; draft.unit = prev.unit;
     draft.perSide = prev.perSide; draft.unilateral = prev.unilateral;
-    draft.reps = prev.reps;
+    draft.reps = prev.reps; draft.seconds = prev.seconds || 0;
   }
 
   v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
@@ -789,14 +873,25 @@ function viewLogSet(v, exerciseId, profileId) {
     onBehalf ? el('span', { class: 'tiny' }, `· not ${state.owner}`) : null
   ));
 
+  const timed = draft.metric === 'time';
+  const loaded = !draft.bodyweight;   // bodyweight work has no weight to enter
+
   const weight = stepper({
     value: draft.weight, step: stepFor(draft.unit), min: 0, decimals: 2,
     onChange: (val) => { draft.weight = val; },
   });
-  const reps = stepper({
-    value: draft.reps, step: 1, min: 0, decimals: 0,
-    onChange: (val) => { draft.reps = val; },
-  });
+
+  // Reps or a duration, never both. 5s steps, because 1s would make a 90s plank
+  // eighteen taps.
+  const effort = timed
+    ? stepper({ value: draft.seconds, step: TIME_STEP, min: 0, decimals: 0,
+                onChange: (val) => { draft.seconds = val; } })
+    : stepper({ value: draft.reps, step: 1, min: 0, decimals: 0,
+                onChange: (val) => { draft.reps = val; } });
+
+  // Live readout, so 90 reads as 1:30 without waiting for the set to save.
+  const clock = timed ? el('div', { class: 'clock' }, formatDuration(draft.seconds)) : null;
+  if (timed) effort.node.addEventListener('input', () => { clock.textContent = formatDuration(effort.get()); });
 
   // Changing unit retunes the step and snaps the current value onto its grid,
   // so switching kg -> lb cannot leave you on 17.5 lb.
@@ -814,22 +909,24 @@ function viewLogSet(v, exerciseId, profileId) {
   };
   paintUnits();
 
-  form.append(
-    el('div', { class: 'row' },
+  if (loaded) {
+    form.append(el('div', { class: 'row' },
       el('div', { class: 'grow' }, field('Weight', weight.node)),
       el('div', { class: 'grow' }, field('Unit', unitRow))
-    ),
-    field('Reps', reps.node)
-  );
+    ));
+  } else {
+    form.append(el('div', { class: 'tiny faint', style: 'margin-bottom:10px' }, 'Bodyweight — no load to record'));
+  }
 
-  /* ---------------- extras, collapsed ----------------
-     Most sets are weight and reps only. Everything below is occasional, so it
-     hides behind one tap and the common case becomes two taps and Save.
-     Expanded state is remembered per exercise: a machine where you always leave
-     a comment stays open. */
-  const moreKey = 'gn.more.' + exerciseId;
-  let moreOpen = localStorage.getItem(moreKey) === '1';
+  form.append(field(timed ? 'Hold time (seconds)' : 'Reps', effort.node));
+  if (clock) form.append(clock);
 
+  /* ---------------- the rest of the set ----------------
+     These were briefly hidden behind a "More options" toggle, on the assumption
+     that most sets are weight and reps only. The WhatsApp log says otherwise:
+     65.5% of recorded sets carry an annotation — form, support, struggle. So the
+     toggle was an extra tap on the majority case, not the minority. Everything
+     stays visible. */
   const halfInput  = el('input', { type: 'number', inputmode: 'numeric', value: draft.halfReps || '' });
   const commentBox = el('textarea', { placeholder: 'Form, struggle, spotter, banter…' });
 
@@ -887,37 +984,27 @@ function viewLogSet(v, exerciseId, profileId) {
   };
   paintDrops();
 
-  const moreBody = el('div', { class: 'more-body' + (moreOpen ? ' open' : '') },
-    field('Half reps', halfInput),
+  if (!timed) form.append(field('Half reps', halfInput));
+
+  form.append(
     el('div', { class: 'row', style: 'margin-bottom:12px' },
-      toggle('kg/side', 'perSide', 'weight per side'),
-      toggle('Each side', 'unilateral', 'reps per side'),
+      loaded ? toggle('kg/side', 'perSide', 'weight per side') : null,
+      toggle('Each side', 'unilateral', timed ? 'held each side' : 'reps per side'),
       toggle('Warm-up', 'warmup', 'excluded from PRs')
     ),
     field('Support', supportRow),
-    field('Comment', commentBox),
-    el('h3', {}, 'Drop set'),
-    dropsWrap
+    field('Comment', commentBox)
   );
-
-  const moreBtn = el('button', { class: 'more-toggle' + (moreOpen ? ' open' : ''), onClick: () => {
-    moreOpen = !moreOpen;
-    moreBody.classList.toggle('open', moreOpen);
-    moreBtn.classList.toggle('open', moreOpen);
-    moreBtn.textContent = moreOpen ? 'Fewer options' : 'More options';
-    try { localStorage.setItem(moreKey, moreOpen ? '1' : '0'); } catch {}
-  } }, moreOpen ? 'Fewer options' : 'More options');
-
-  form.append(moreBtn, moreBody);
+  if (!timed && loaded) form.append(el('h3', {}, 'Drop set'), dropsWrap);
 
   form.addEventListener('input',  () => { formDirty = true; });
   form.addEventListener('change', () => { formDirty = true; });
   v.append(form);
 
   v.append(busyButton('Save set', 'Adding…', 'btn primary block', async () => {
-    const w = weight.get();
-    const r = reps.get();
-    if (r <= 0) return toast('Need at least one rep');
+    const w = loaded ? weight.get() : 0;
+    const e = effort.get();
+    if (e <= 0) return toast(timed ? 'Need a hold time' : 'Need at least one rep');
 
     // No confirm here: the target came from the URL and is named at the top of
     // this form, so there is no silent global selection left to get wrong.
@@ -927,13 +1014,15 @@ function viewLogSet(v, exerciseId, profileId) {
       exerciseId: ex.id,
       date: today,
       weight: w,
-      reps: r,
-      halfReps: parseInt(halfInput.value) || 0,
+      reps: timed ? 0 : e,
+      seconds: timed ? e : 0,
+      halfReps: timed ? 0 : (parseInt(halfInput.value) || 0),
       comment: commentBox.value.trim(),
       enteredBy: state.owner || null,
       loggedAt: Date.now(),   // client clock: correct offline, and instant
-      drops: draft.drops.filter((d) => d.reps > 0),
+      drops: (timed || !loaded) ? [] : draft.drops.filter((d) => d.reps > 0),
     });
+    tracker?.logged();
     toast(`Set logged for ${p.name}`);
     formDirty = false;
     back();
@@ -970,11 +1059,24 @@ function viewHistory(v) {
       if (v !== null) { kg += v; comparable++; }
     }
 
+    // First and last logged times bound the session. Sorted because a set can
+    // arrive out of order when two phones sync after being offline.
+    const stamps = sets.map(setTime).filter(Boolean).sort((a, b) => a - b);
+    const first = stamps[0] || null;
+    const last  = stamps[stamps.length - 1] || null;
+
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'row spread' },
-      el('strong', {}, dayLabel(date)),
+      el('strong', {}, dayLabel(date) + (first ? ` at ${fmtTime(first)}` : '')),
       el('span', { class: 'tiny faint' }, `${working.length} sets`)
     ));
+
+    if (first && last && last > first) {
+      card.append(el('div', { class: 'tiny muted', style: 'margin-top:2px' },
+        `${fmtTime(first)} → ${fmtTime(last)}`,
+        el('span', { class: 'faint' }, `  ·  ${fmtSpan(last - first)}`)));
+    }
+
     if (comparable) {
       card.append(el('div', { class: 'tiny muted', style: 'margin-top:2px' },
         `${Math.round(kg).toLocaleString('en-US')} kg total volume` +
@@ -989,7 +1091,7 @@ function viewHistory(v) {
       detail.append(el('div', { style: 'margin-top:10px' },
         el('div', { class: 'tiny muted' }, exerciseById(grp.exerciseId)?.name || '(deleted)')));
       let n = 0;
-      grp.sets.forEach((s) => { if (!s.warmup) n++; detail.append(setLine(s, n, { ownerName: p.name })); });
+      grp.sets.forEach((s) => { if (!s.warmup) n++; detail.append(setLine(s, n, { ownerName: p.name, showTime: true })); });
     }
     card.append(el('button', { class: 'btn sm', style: 'margin-top:8px', onClick: (e) => {
       const open = detail.style.display !== 'none';
@@ -1094,10 +1196,39 @@ function viewExerciseEditor(v, id) {
   paintMuscles();
   v.append(el('h3', {}, 'Muscles — first is dominant'), musclesWrap);
 
+  // --- how it is counted ---
+  // Above units deliberately: whether an exercise is timed decides whether a
+  // weight is even relevant, so it is the first question.
+  const metricWrap = el('div');
+  const paintMetric = () => {
+    clear(metricWrap).append(
+      segmented(Object.values(METRICS).map((m) => ({ key: m.key, label: m.label })),
+        ex.metric === 'time' ? 'time' : 'reps',
+        (k) => { ex.metric = k; paintMetric(); paintUnits(); }),
+      el('div', { class: 'tiny faint', style: 'margin-top:5px' },
+        ex.metric === 'time'
+          ? 'Counted in seconds — planks, dead hangs, any held position.'
+          : 'Counted in repetitions.')
+    );
+  };
+
+  const bwWrap = el('div');
+  const paintBw = () => {
+    const btn = el('button', { class: 'btn' + (ex.bodyweight ? ' primary' : ''), onClick: () => {
+      ex.bodyweight = !ex.bodyweight; paintBw(); paintUnits();
+    } }, ex.bodyweight ? 'Bodyweight' : 'Uses weight');
+    clear(bwWrap).append(btn, el('div', { class: 'tiny faint', style: 'margin-top:5px' },
+      ex.bodyweight ? 'No weight field on the set form.' : 'A weight is recorded for every set.'));
+  };
+
   // --- units ---
   const unitsWrap = el('div');
   const paintUnits = () => {
     clear(unitsWrap);
+    if (ex.bodyweight) {
+      unitsWrap.append(el('div', { class: 'tiny faint' }, 'Not used — this exercise records no weight.'));
+      return;
+    }
     const row = el('div', { class: 'row wrap' });
     for (const u of Object.values(UNITS)) {
       const on = ex.allowedUnits.includes(u.key);
@@ -1117,7 +1248,15 @@ function viewExerciseEditor(v, id) {
       ex.defaultUnit, (k) => { ex.defaultUnit = k; paintUnits(); }));
   };
   paintUnits();
-  v.append(el('h3', {}, 'Units of measure'), unitsWrap);
+  paintMetric();
+  paintBw();
+
+  v.append(el('h3', {}, 'How is it counted?'), metricWrap);
+  v.append(el('h3', {}, 'Load'), bwWrap);
+  // Units are irrelevant to a bodyweight exercise, so the section disappears
+  // rather than sitting there inert.
+  const unitsSection = el('div', {}, el('h3', {}, 'Units of measure'), unitsWrap);
+  v.append(unitsSection);
 
   const mkToggle = (labelText, key, hint) => {
     const btn = el('button', { class: 'btn' + (ex[key] ? ' primary' : ''), onClick: () => {
@@ -1125,9 +1264,14 @@ function viewExerciseEditor(v, id) {
     } }, labelText);
     return el('div', { style: 'margin-bottom:8px' }, btn, el('div', { class: 'tiny faint', style: 'margin-top:3px' }, hint));
   };
-  v.append(el('h3', {}, 'Defaults'),
-    mkToggle('Weight is per side', 'perSideDefault', 'Z-bar, bench, leg press — "15 kg each side"'),
-    mkToggle('Reps are per side', 'unilateralDefault', 'Single-arm work — "12 reps each side"'));
+  v.append(el('h3', {}, 'Defaults'));
+  if (!ex.bodyweight) {
+    v.append(mkToggle('Weight is per side', 'perSideDefault', 'Z-bar, bench, leg press — "15 kg each side"'));
+  }
+  v.append(mkToggle(
+    ex.metric === 'time' ? 'Held each side' : 'Reps are per side',
+    'unilateralDefault',
+    ex.metric === 'time' ? 'Side plank — timed per side' : 'Single-arm work — "12 reps each side"'));
 
   const aliasInput = el('input', { value: (ex.aliases || []).join(', '), placeholder: 'db press, incline db' });
   v.append(el('h3', {}, 'Search aliases'), aliasInput,

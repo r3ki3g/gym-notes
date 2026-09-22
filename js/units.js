@@ -59,6 +59,28 @@ export function normalizedKg(set) {
   return set.perSide ? base * 2 : base;
 }
 
+/**
+ * How an exercise is counted. Stored on the SET as well as the exercise, for the
+ * same reason `unit` is: flipping an exercise from reps to time later must not
+ * rewrite what already happened.
+ */
+export const METRICS = {
+  reps: { key: 'reps', label: 'Reps', noun: 'reps' },
+  time: { key: 'time', label: 'Time', noun: 'seconds' },
+};
+
+/** Seconds step for the duration stepper — 1s would be unusable for a 90s plank. */
+export const TIME_STEP = 5;
+
+/** 45 -> "45s", 90 -> "1:30", 120 -> "2:00". */
+export function formatDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds || 0));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+const isTimed = (set) => set?.metric === 'time';
+
 /** Total reps including halves, which count as 0.5. */
 export function totalReps(set) {
   return (set.reps || 0) + (set.halfReps || 0) * 0.5;
@@ -72,6 +94,17 @@ export function formatLoad(weight, unit, perSide) {
   if (!u) return `${trim(weight)}`;
   const body = u.key === 'block' ? `#${trim(weight)}` : `${trim(weight)} ${u.label}`;
   return perSide ? `${body}/side` : body;
+}
+
+/** The load column for a set — "BW" when there is no external weight. */
+export function formatSetLoad(set) {
+  if (set.bodyweight) return 'BW';
+  return formatLoad(set.weight, set.unit, set.perSide);
+}
+
+/** Whatever this set is counted in — reps or a duration. */
+export function formatEffort(set) {
+  return isTimed(set) ? formatDuration(set.seconds) : formatReps(set);
 }
 
 /** "12 + 1 half", "14 each side" — mirrors how the WhatsApp log reads. */
@@ -92,6 +125,12 @@ export function formatReps(set) {
  * machine: half a number is worse than an honest gap.
  */
 export function setVolumeKg(set) {
+  // weight x seconds is not the same quantity as weight x reps, so a timed set
+  // is excluded rather than silently summed into a kg total. Bodyweight sets
+  // have no external load at all, so they are excluded too — counting them as
+  // zero would quietly drag a session's average down.
+  if (isTimed(set) || set.bodyweight) return null;
+
   const main = normalizedKg(set);
   if (main === null) return null;
 

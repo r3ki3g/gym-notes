@@ -47,6 +47,11 @@ export const SEED_EXERCISES = [
   { name:'Dumbbell concentration curl', muscles:['biceps'], allowedUnits:KL, defaultUnit:'lb', unilateralDefault:true, aliases:['db concentration curls'] },
   { name:'Dumbbell wrist curl', muscles:['forearms'], allowedUnits:KL, defaultUnit:'kg', unilateralDefault:true, aliases:['forearms db wrist curls'] },
 
+  // ---- core (time-based) ----
+  { name:'Plank', muscles:['abs','obliques'], allowedUnits:B, defaultUnit:'block', metric:'time', bodyweight:true },
+  { name:'Side plank', muscles:['obliques','abs'], allowedUnits:B, defaultUnit:'block', metric:'time', bodyweight:true, unilateralDefault:true },
+  { name:'Dead hang', muscles:['lats','forearms'], allowedUnits:B, defaultUnit:'block', metric:'time', bodyweight:true },
+
   // ---- legs ----
   { name:'Smith machine squat', muscles:['quads','glutes','hamstrings'], allowedUnits:KL, defaultUnit:'kg', perSideDefault:true },
   { name:'Leg press', muscles:['quads','glutes'], allowedUnits:KL, defaultUnit:'kg', perSideDefault:true },

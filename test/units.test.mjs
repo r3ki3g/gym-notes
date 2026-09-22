@@ -1,4 +1,5 @@
-import { stepFor, snapTo, normalizedKg, setVolumeKg, formatLoad, formatReps, totalReps } from '../js/units.js';
+import { stepFor, snapTo, normalizedKg, setVolumeKg, formatLoad, formatSetLoad,
+         formatReps, formatEffort, formatDuration, totalReps, TIME_STEP } from '../js/units.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -40,6 +41,35 @@ eq('15 kg/side',  formatLoad(15, 'kg', true), '15 kg/side');
 eq('17.5 kg',     formatLoad(17.5, 'kg', false), '17.5 kg');
 eq('12 + 1 half reps', formatReps({ reps: 12, halfReps: 1 }), '12 + 1 half reps');
 eq('each side',   formatReps({ reps: 12, halfReps: 0, unilateral: true }), '12 reps each side');
+
+console.log('\ntimed exercises\n');
+eq('45s stays seconds',        formatDuration(45), '45s');
+eq('60s becomes 1:00',         formatDuration(60), '1:00');
+eq('90s becomes 1:30',         formatDuration(90), '1:30');
+eq('125s becomes 2:05',        formatDuration(125), '2:05');
+eq('0 is handled',             formatDuration(0), '0s');
+eq('null is handled',          formatDuration(null), '0s');
+eq('step is 5s, not 1s',       TIME_STEP, 5);
+
+eq('a timed set reports its duration, not reps',
+  formatEffort({ metric: 'time', seconds: 90, reps: 0 }), '1:30');
+eq('a rep set is unaffected',
+  formatEffort({ metric: 'reps', reps: 12, halfReps: 1 }), '12 + 1 half reps');
+eq('a set with no metric defaults to reps',
+  formatEffort({ reps: 8, halfReps: 0 }), '8 reps');
+
+console.log('\ntimed and bodyweight sets stay out of kg volume\n');
+eq('timed set excluded even with a weight',
+  setVolumeKg({ metric: 'time', seconds: 60, weight: 10, unit: 'kg', reps: 0, drops: [] }), null);
+eq('bodyweight set excluded',
+  setVolumeKg({ metric: 'reps', bodyweight: true, weight: 0, unit: 'kg', reps: 12, halfReps: 0, drops: [] }), null);
+eq('an ordinary set still counts',
+  setVolumeKg({ metric: 'reps', weight: 20, unit: 'kg', perSide: false, reps: 10, halfReps: 0, drops: [] }), 200);
+
+console.log('\nbodyweight shows BW instead of a load\n');
+eq('BW',        formatSetLoad({ bodyweight: true, weight: 0, unit: 'kg' }), 'BW');
+eq('17.5 kg',   formatSetLoad({ bodyweight: false, weight: 17.5, unit: 'kg', perSide: false }), '17.5 kg');
+eq('#5',        formatSetLoad({ weight: 5, unit: 'block', perSide: false }), '#5');
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

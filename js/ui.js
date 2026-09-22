@@ -204,6 +204,29 @@ export function stampMs(ts) {
   return null;
 }
 
+/**
+ * "5:12 PM", or "5:12:34 PM" with seconds.
+ *
+ * Locale is pinned to en-US rather than the device default: the rest of the app
+ * uses MM/DD/YY, and a device set to a 24-hour locale would otherwise render
+ * "17:12" next to those dates.
+ */
+export function fmtTime(ms, withSeconds = false) {
+  if (!ms) return '';
+  const opts = { hour: 'numeric', minute: '2-digit', hour12: true };
+  if (withSeconds) opts.second = '2-digit';
+  return new Date(ms).toLocaleTimeString('en-US', opts);
+}
+
+/** A span in human terms: "2h 52m", "48m", "3m". */
+export function fmtSpan(ms) {
+  const mins = Math.max(0, Math.round((ms || 0) / 60000));
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 /** 09/20/26 — matches the log's own date style. */
 export function fmtDate(iso) {
   const [y, m, d] = iso.split('-');

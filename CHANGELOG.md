@@ -11,6 +11,91 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.8.0] — 09/22/26
+
+### Added
+- **Times in the History tab.**
+  - Day header reads `Yesterday at 5:12 PM`, with the session span and length
+    beneath it: `5:12 PM → 8:04 PM · 2h 52m`.
+  - Every set in the expanded list carries its own timestamp **to the second**.
+  - Times come from `loggedAt` (client clock) and fall back to `createdAt` for
+    sets logged before 1.1.0.
+  - The span sorts timestamps first, because two phones syncing after being
+    offline can deliver sets out of order.
+- Timestamps are opt-in per call site (`showTime`), so the Log tab stays compact.
+
+### Notes
+- Time formatting is pinned to `en-US` rather than the device locale. A phone set
+  to a 24-hour locale would otherwise show `17:12` beside `09/20/26` dates.
+
+---
+
+## [1.7.0] — 09/22/26
+
+### Added
+- **Usage tracking** (`js/usage.js`, `usage` collection): who is on the phone,
+  which browser, how long, which screens, how many sets logged.
+  - **One mutable document per app-open**, merged into every 30 seconds — not an
+    append per tick. At one write every 5s a single forgotten open tab costs
+    17,280 writes/day, 86% of the free tier, and once writes are exhausted they
+    fail for *everything* including logging sets. This costs about 2.4% of quota
+    for a two-phone workout, and ~2,900 documents a year instead of 6.3M.
+  - **Only counts visible time.** Gated on `visibilityState`, so a backgrounded
+    tab writes nothing — which removes the runaway case entirely.
+  - Flushes on `visibilitychange` and `pagehide` so the tail of a session is not
+    lost; `pagehide` is the one that fires reliably on mobile.
+  - Failures are swallowed with a console warning. Analytics is the least
+    important write in the app and must never break logging.
+  - Session id is held in `sessionStorage`, so a reload continues one session
+    instead of forking it.
+- Brave is detected via `navigator.brave` — it reports a Chrome user-agent with
+  no token of its own, so nothing in the UA string can identify it.
+
+### Fixed
+- `parseBrowser` reported iOS Safari with no version. iOS inserts
+  `Mobile/15E148` between `Version/` and `Safari/`, and the regex required them
+  to be adjacent. Caught by a test, not by hand.
+
+---
+
+## [1.6.0] — 09/22/26
+
+### Added
+- **Time-based exercises.** An exercise can be counted in seconds instead of
+  reps — planks, dead hangs, any held position. Set with a `Reps / Time` toggle
+  in the exercise editor.
+  - The set form shows a duration stepper in **5-second steps** (1s would make a
+    90s plank eighteen taps) with a live `1:30` readout.
+  - Half reps and drop sets are hidden for timed exercises; neither means
+    anything on a held position.
+  - Displays as `BW × 1:30` rather than `× 90 reps`.
+- **Bodyweight exercises.** A `Bodyweight / Uses weight` toggle removes the
+  weight field entirely, and the units section with it. Without this a plank
+  forced you to record `0 kg × 60s`.
+- Three timed exercises seeded: Plank, Side plank, Dead hang.
+
+### Changed
+- `setVolumeKg()` returns `null` for timed and bodyweight sets. `weight ×
+  seconds` is not the same quantity as `weight × reps`, and a bodyweight set has
+  no external load — counting either as zero would quietly drag a session's
+  totals down. Same treatment block-based sets already get.
+- `metric` and `bodyweight` are copied onto each set, like `unit` already was,
+  so changing an exercise later cannot rewrite how past sets were counted.
+
+---
+
+## [1.5.0] — 09/22/26
+
+### Removed
+- **The "More options" toggle on the set form.** It was built on the assumption
+  that most sets are weight and reps only, with half reps, side toggles, support
+  level, comment and drop sets as occasional extras. Counting the WhatsApp log
+  settles it: **129 of 197 recorded sets (65.5%) carry an annotation** — form
+  notes, support, struggle. The toggle added a tap to the majority case, not the
+  minority. Everything on the set form is visible again.
+
+---
+
 ## [1.4.1] — 09/22/26
 
 ### Changed

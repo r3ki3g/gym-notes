@@ -6,4 +6,4 @@
 //   PATCH — a fix, no new behaviour
 //
 // Keep CHANGELOG.md in step, and tag the commit: git tag v<version>
-export const VERSION = '1.4.1';
+export const VERSION = '1.8.0';

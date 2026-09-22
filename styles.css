@@ -103,15 +103,12 @@ select{min-height:var(--tap)}
 .stepper .step-value::-webkit-outer-spin-button,
 .stepper .step-value::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 
-/* ---------- collapsible extras ---------- */
-.more-toggle{
-  width:100%;background:none;border:0;border-top:1px solid var(--line);
-  color:var(--dim);font-size:.8rem;padding:11px 0 3px;margin-top:4px;text-align:center;
+/* live m:ss readout under the duration stepper */
+.clock{
+  text-align:center;font-size:1.5rem;font-weight:800;letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;color:var(--accent);
+  margin:-4px 0 12px;
 }
-.more-toggle::after{content:" ▾"}
-.more-toggle.open::after{content:" ▴"}
-.more-body{display:none;padding-top:10px}
-.more-body.open{display:block}
 
 /* ---------- freshness ----------
    Finite iteration counts so the glow stops on its own with no JS timer, and a
@@ -245,6 +242,7 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .load{font-weight:700;font-variant-numeric:tabular-nums}
 .drop{color:var(--warn)}
 .cmt{color:var(--dim);font-size:.83rem;margin-top:2px;word-wrap:break-word}
+.set-at{color:var(--faint);font-size:.7rem;margin-top:3px;font-variant-numeric:tabular-nums}
 .sup-none{color:var(--good)} .sup-light{color:var(--warn)} .sup-heavy{color:var(--bad)}
 
 .result{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:11px 13px;margin-bottom:8px}
