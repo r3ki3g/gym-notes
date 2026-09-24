@@ -1,4 +1,4 @@
-import { parseBrowser, createTracker, sessionId, FLUSH_MS } from '../js/usage.js';
+import { parseBrowser, createTracker, sessionId, deviceId, deviceHints, friendlyModel, FLUSH_MS } from '../js/usage.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -79,6 +79,44 @@ eq('survives storage being unavailable',
 
 console.log('\nflush cadence\n');
 eq('30s, not 5s', FLUSH_MS, 30000);
+
+console.log('\nfriendlyModel — Samsung reports a code, Pixel reports a name\n');
+eq('Pixel needs no mapping',   friendlyModel('Pixel 9 Pro'), 'Pixel 9 Pro');
+eq('S23 European variant',     friendlyModel('SM-S911B'), 'Galaxy S23 (SM-S911B)');
+eq('S23 US variant, same phone', friendlyModel('SM-S911U'), 'Galaxy S23 (SM-S911U)');
+eq('S23 Ultra',                friendlyModel('SM-S918B'), 'Galaxy S23 Ultra (SM-S918B)');
+eq('S24 Ultra',                friendlyModel('SM-S928B'), 'Galaxy S24 Ultra (SM-S928B)');
+eq('Z Fold5',                  friendlyModel('SM-F946B'), 'Galaxy Z Fold5 (SM-F946B)');
+eq('unknown code passes through rather than guessing',
+   friendlyModel('SM-X999Z'), 'SM-X999Z');
+eq('empty',                    friendlyModel(''), '');
+eq('null',                     friendlyModel(null), '');
+
+console.log('\ndeviceId — persistent, unlike the per-tab session id\n');
+const store = (() => { const m = {}; return { getItem: (k) => m[k] ?? null, setItem: (k, v) => { m[k] = v; } }; })();
+const d1 = deviceId(store);
+eq('same id on a later call', deviceId(store), d1);
+eq('prefixed',                /^d-[a-z0-9]+$/.test(d1), true);
+eq('a different device gets a different id',
+   deviceId({ getItem: () => null, setItem() {} }) !== d1, true);
+eq('storage blocked does not crash',
+   deviceId({ getItem() { throw new Error('blocked'); }, setItem() {} }), 'd-unknown');
+
+console.log('\ndeviceHints — degrades where the API does not exist\n');
+const hints = await deviceHints({
+  userAgentData: { getHighEntropyValues: async () => ({ model: 'Pixel 9 Pro', platformVersion: '15.0.0' }) },
+});
+eq('model read from Client Hints', hints.model, 'Pixel 9 Pro');
+eq('platform version read',        hints.platformVersion, '15.0.0');
+
+const none = await deviceHints({});            // Firefox / Safari: no userAgentData
+eq('no userAgentData -> blank, not a throw', none, { model: '', platformVersion: '', brave: false });
+
+const brave = await deviceHints({ brave: { isBrave: async () => true } });
+eq('Brave detected', brave.brave, true);
+
+const broken = await deviceHints({ userAgentData: { getHighEntropyValues: async () => { throw new Error('denied'); } } });
+eq('a rejected hints call is swallowed', broken.model, '');
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -100,6 +100,75 @@ export function createTracker({ now = () => Date.now() } = {}) {
   };
 }
 
+// Samsung reports a model code, not a name. Prefixes only — the trailing letter
+// is the regional variant (B Europe, U US, N Korea) and does not change the phone.
+const SAMSUNG = {
+  'SM-G991': 'Galaxy S21',  'SM-G996': 'Galaxy S21+',  'SM-G998': 'Galaxy S21 Ultra',
+  'SM-S901': 'Galaxy S22',  'SM-S906': 'Galaxy S22+',  'SM-S908': 'Galaxy S22 Ultra',
+  'SM-S911': 'Galaxy S23',  'SM-S916': 'Galaxy S23+',  'SM-S918': 'Galaxy S23 Ultra',
+  'SM-S921': 'Galaxy S24',  'SM-S926': 'Galaxy S24+',  'SM-S928': 'Galaxy S24 Ultra',
+  'SM-S931': 'Galaxy S25',  'SM-S936': 'Galaxy S25+',  'SM-S938': 'Galaxy S25 Ultra',
+  'SM-F946': 'Galaxy Z Fold5', 'SM-F956': 'Galaxy Z Fold6',
+  'SM-F731': 'Galaxy Z Flip5', 'SM-F741': 'Galaxy Z Flip6',
+  'SM-A546': 'Galaxy A54', 'SM-A556': 'Galaxy A55',
+};
+
+/**
+ * "SM-S911B" -> "Galaxy S23 (SM-S911B)". Pixels already report a readable name.
+ *
+ * The raw code is always kept: the mapping is mine and will be missing or wrong
+ * for a model I have not listed, and a code is better than a confident mislabel.
+ */
+export function friendlyModel(model = '') {
+  const m = String(model || '').trim();
+  if (!m) return '';
+  const prefix = (m.match(/^(SM-[A-Z]\d{3})/) || [])[1];
+  const name = prefix && SAMSUNG[prefix];
+  return name ? `${name} (${m})` : m;
+}
+
+/**
+ * Device model and platform version via Client Hints.
+ *
+ * The user-agent is no longer usable for this: Chrome's UA Reduction replaced
+ * the Android model with a literal "K", so every Android Chrome reports
+ * "Android 10; K" whatever the phone. getHighEntropyValues still returns the
+ * real model, on Chromium only — Firefox and Safari have no userAgentData, and
+ * iOS reports every iPhone as "iPhone" regardless.
+ */
+export async function deviceHints(nav = (typeof navigator !== 'undefined' ? navigator : {})) {
+  const out = { model: '', platformVersion: '', brave: false };
+  try { if (nav.brave?.isBrave) out.brave = !!(await nav.brave.isBrave()); } catch {}
+  try {
+    const d = await nav.userAgentData?.getHighEntropyValues?.(['model', 'platformVersion']);
+    if (d) {
+      out.model = d.model || '';
+      out.platformVersion = d.platformVersion || '';
+    }
+  } catch {}
+  return out;
+}
+
+/**
+ * Stable id for this physical device, in localStorage so it survives across
+ * sessions. The browser string cannot separate two people on the same setup —
+ * three of the first seven sessions were all "Chrome 153 / Android" and could
+ * have been one phone or two. This makes that unambiguous.
+ */
+export function deviceId(storage) {
+  const KEY = 'gn.deviceId';
+  try {
+    let id = storage.getItem(KEY);
+    if (!id) {
+      id = 'd-' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+      storage.setItem(KEY, id);
+    }
+    return id;
+  } catch {
+    return 'd-unknown';
+  }
+}
+
 /** Stable per-tab id so a reload continues one session instead of forking it. */
 export function sessionId(storage) {
   const KEY = 'gn.usageSession';

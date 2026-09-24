@@ -11,6 +11,29 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.9.0] — 09/24/26
+
+### Added
+- **Device model on usage documents.** `Pixel 9 Pro`, `Galaxy S23 (SM-S911B)`.
+  Read via Client Hints (`getHighEntropyValues`), because the user-agent no
+  longer carries it — Chrome's UA Reduction replaced the Android model with a
+  literal `K`, so every Android Chrome reports `Android 10; K` whatever the
+  phone. Chromium only; Firefox and Safari have no `userAgentData`, and iOS
+  reports every iPhone as "iPhone".
+- Samsung model codes are mapped to readable names (S21–S25, Fold, Flip, A5x),
+  keeping the raw code alongside — the mapping is hand-written and will miss
+  models, and a code beats a confident mislabel.
+- **`deviceId`, persistent in `localStorage`.** The browser string cannot
+  separate two people on the same setup: three of the first seven recorded
+  sessions were all `Chrome 153 / Android` and could have been one phone or two.
+  This makes each physical device unambiguous regardless of what it reports.
+
+### Notes
+- Both lookups are async, so the first flush of a session goes out without them
+  and a second follows once they resolve.
+
+---
+
 ## [1.8.0] — 09/22/26
 
 ### Added

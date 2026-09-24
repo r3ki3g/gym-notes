@@ -8,7 +8,7 @@ import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatDurat
          SUPPORT, METRICS, TIME_STEP, stepFor, snapTo } from './units.js';
 import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper, fmtTime, fmtSpan } from './ui.js';
 import { VERSION } from './version.js';
-import { parseBrowser, createTracker, sessionId, FLUSH_MS } from './usage.js';
+import { parseBrowser, createTracker, sessionId, deviceId, deviceHints, friendlyModel, FLUSH_MS } from './usage.js';
 import { chime, soundOn, setSound, notifOn, setNotif, primeAudio,
          vibrateOn, setVibrate, vibrateSupported, buzzTest } from './notify.js';
 
@@ -247,6 +247,7 @@ function startRecentWatch() {
 let tracker = null;
 let usageId = null;
 let usageBrowser = '';
+let usageDevice = null;      // { id, model, platformVersion }
 let usageStartedAt = 0;
 let usageTimer = null;
 
@@ -260,6 +261,9 @@ async function flushUsage() {
     await S.upsertUsage(usageId, {
       owner: state.owner || null,
       browser: usageBrowser,
+      deviceId: usageDevice?.id || null,
+      model: usageDevice?.model || null,
+      platformVersion: usageDevice?.platformVersion || null,
       version: VERSION,
       startedAt: usageStartedAt,
       lastSeenAt: Date.now(),
@@ -275,11 +279,19 @@ async function flushUsage() {
 function startUsage() {
   if (tracker) return;
 
-  // Brave reports a Chrome user-agent with no token of its own; the only signal
-  // is navigator.brave, and it is async, so the label is corrected on arrival.
   usageBrowser = parseBrowser(navigator.userAgent);
-  navigator.brave?.isBrave?.().then((yes) => {
-    if (yes) usageBrowser = parseBrowser(navigator.userAgent, { brave: true });
+
+  // Survives across sessions, unlike the per-tab session id: two phones
+  // reporting the same browser string are still two distinct devices.
+  usageDevice = { id: deviceId(localStorage), model: '', platformVersion: '' };
+
+  // Both the Brave check and the model lookup are async, so the first flush goes
+  // out without them and a second one follows once they land.
+  deviceHints().then((h) => {
+    if (h.brave) usageBrowser = parseBrowser(navigator.userAgent, { brave: true });
+    usageDevice.model = friendlyModel(h.model);
+    usageDevice.platformVersion = h.platformVersion || '';
+    flushUsage();
   }).catch(() => {});
 
   usageId = sessionId(sessionStorage);
