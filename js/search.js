@@ -17,50 +17,97 @@ const NAME_PREFIX    = 45;
 const ALIAS          = 40;
 const NAME_SUBSTRING = 22;
 
-// Gym shorthand as it appears in the chat log.
-const SYNONYMS = {
-  db:'dumbbell', dumbell:'dumbbell', bb:'barbell', cabel:'cable',
-  tri:'triceps', tricep:'triceps', bi:'biceps', bicep:'biceps',
-  delt:'delts', delts:'shoulders', shoulder:'shoulders',
-  lat:'lats', pulldown:'pull down', ohp:'overhead press',
-  quad:'quads', ham:'hamstrings', calf:'calves', ab:'abs',
-};
+// Interchangeable spellings. Every member finds every other, so neither the
+// query nor the exercise name has to use a "canonical" form.
+//
+// This used to be a one-way map that REPLACED the typed word: "calf" became
+// "calves", so searching "calf" could not find an exercise named "Calf raises"
+// unless its muscles happened to be tagged. 621 queries against the live pool
+// turned up four such dead words (calf, bicep, dumbell, pulldown). Now the typed
+// word is always searched as typed, and a group only ADDS alternatives.
+const SYNONYM_GROUPS = [
+  ['dumbbell', 'dumbell', 'db'],
+  ['barbell', 'bb'],
+  ['cable', 'cabel'],
+  ['triceps', 'tricep', 'tri'],
+  ['biceps', 'bicep', 'bi'],
+  ['delts', 'delt'],
+  ['shoulders', 'shoulder', 'delts'],
+  ['lats', 'lat'],
+  ['pulldown', 'pull down'],
+  ['overhead press', 'ohp'],
+  ['quads', 'quad'],
+  ['hamstrings', 'ham'],
+  ['calves', 'calf'],
+  ['abs', 'ab'],
+];
 
 const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
+const GROUPS_BY_WORD = new Map();
+for (const g of SYNONYM_GROUPS) for (const w of g) {
+  if (!GROUPS_BY_WORD.has(w)) GROUPS_BY_WORD.set(w, new Set());
+  for (const o of g) if (o !== w) GROUPS_BY_WORD.get(w).add(o);
+}
+
+/** The words as typed, lower-cased. Case never affects matching. */
 export function tokenize(q) {
-  return norm(q).split(' ').filter(Boolean).map((t) => SYNONYMS[t] || t);
+  return norm(q).split(' ').filter(Boolean);
+}
+
+/** Alternatives a group adds for a typed word — never including the word itself. */
+export function alternativesFor(token) {
+  return [...(GROUPS_BY_WORD.get(token) || [])];
 }
 
 // "tricep" should hit muscle "triceps", and "triceps" should hit "tricep".
-// Substring either direction, with a floor so "ab" doesn't match "barbell".
+// Word-PREFIX either direction, per word of the muscle name ("side delts").
+// This was plain substring until synonym groups made short words like "tri"
+// searchable in their own right — "tri" then matched the middle of
+// "hams-tri-ngs" and ranked Leg curl first for "tricep". Under 3 characters it
+// must be an exact word, so "ab" cannot match "abductors".
 function loose(haystack, needle) {
-  if (needle.length < 3) return haystack === needle;
-  return haystack.includes(needle) || needle.includes(haystack);
+  const words = haystack.split(' ');
+  if (needle.length < 3) return words.includes(needle);
+  return words.some((w) => w.startsWith(needle) || needle.startsWith(w));
 }
 
-/** Best score for a single token against one exercise, or 0 if it matches nothing. */
-function scoreToken(ex, token) {
-  let best = 0;
-
+function muscleScore(ex, needle) {
   const muscles = ex.muscles || [];
   for (let i = 0; i < muscles.length; i++) {
-    if (loose(norm(muscles[i]), token)) {
-      best = Math.max(best, MUSCLE_PRIMARY / (i + 1));
-      break; // ordered list — the earliest hit is the strongest
-    }
+    if (loose(norm(muscles[i]), needle)) return MUSCLE_PRIMARY / (i + 1); // earliest hit is strongest
   }
+  return 0;
+}
 
-  for (const w of norm(ex.name).split(' ')) {
-    if (w === token)            best = Math.max(best, NAME_EXACT);
+/**
+ * Best score for one typed token, or 0 if it matches nothing.
+ *
+ * The typed word gets full search-as-you-type matching: exact, prefix, and
+ * substring. Alternatives from a synonym group match whole words or phrases
+ * ONLY — otherwise "hamstrings" would expand to "ham", prefix-match "hammer",
+ * and surface Hammer curl.
+ */
+function scoreToken(ex, token) {
+  const nameWords = norm(ex.name).split(' ');
+  const nameText  = ' ' + norm(ex.name) + ' ';
+  const aliasNorm = (ex.aliases || []).map(norm);
+
+  let best = muscleScore(ex, token);
+
+  for (const w of nameWords) {
+    if (w === token)              best = Math.max(best, NAME_EXACT);
     else if (w.startsWith(token)) best = Math.max(best, NAME_PREFIX);
     else if (token.length >= 4 && w.includes(token)) best = Math.max(best, NAME_SUBSTRING);
   }
+  for (const a of aliasNorm) {
+    if (a.split(' ').some((w) => w === token || w.startsWith(token))) best = Math.max(best, ALIAS);
+  }
 
-  for (const a of ex.aliases || []) {
-    if (norm(a).split(' ').some((w) => w === token || w.startsWith(token))) {
-      best = Math.max(best, ALIAS);
-    }
+  for (const alt of alternativesFor(token)) {
+    best = Math.max(best, muscleScore(ex, alt));
+    if (nameText.includes(' ' + alt + ' ')) best = Math.max(best, NAME_EXACT);
+    if (aliasNorm.some((a) => (' ' + a + ' ').includes(' ' + alt + ' '))) best = Math.max(best, ALIAS);
   }
 
   return best;

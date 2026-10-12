@@ -11,6 +11,289 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.16.0] — 10/12/26
+
+### Added
+- **Chart entrance animation.** Settings → Display → *Animate charts*, **on by
+  default**, and always off when the phone is set to reduce motion.
+  - A **purple-to-gold glide** sweeps slowly left to right behind the chart
+    (2.6s). It sits behind the lines and dots, in the plot's own stacking
+    context, so it can be bright without washing them out. The first version ran
+    on top at 15% for 1.1s and was barely noticed.
+  - Each **line draws itself** left to right at an even pace (900ms).
+  - **Dots drop in** with a slight bounce, starting white and settling into
+    their colour, a steady beat after the line passes them. The first cut used
+    an ease-out line that outran the dots: the gap grew from nothing on the
+    left to ~0.8s on the right.
+  - **Plays once per chart**: when it first appears and when the metric changes.
+    Tapping a point re-renders the chart, and replaying on every tap would get
+    old fast.
+  - **A rebuild mid-entrance resumes instead of snapping or restarting.** Every
+    delay subtracts the elapsed time (`--t`), the same trick the freshness glow
+    uses.
+  - The line-length and dot-timing maths is in `progress.js` and tested. The
+    computed line length matched the browser's own `getTotalLength()` exactly
+    (239.7 vs 239.7).
+
+### Verified
+- Real app, read-only. Frames captured mid-entrance: the line half-drawn with the
+  left dots landed, and the glide visible behind the chart. A tap after the
+  entrance didn't replay it; a tap at 1.5s resumed from 1,509ms; the toggle
+  turned it off. No console errors.
+
+---
+
+## [1.15.0] — 10/12/26
+
+### Added
+- **Quick-add notes** under the comment box: *Ultra slow reps · Slow eccentric ·
+  Good form · Help on the way up · Last 2 supped · Struggled last reps · Wrist
+  pain · Chad 💪*. Tap to add, tap again to remove. One sideways-scrolling row,
+  28px tall however many there are.
+  - Chosen from the data: only 9.6% of sets logged in the app carry a comment,
+    against 65.5% annotated in the WhatsApp log, so typing between sets was the
+    barrier.
+  - Nothing that already has a field. A "Failure" chip would record it in the
+    comment while Support still said none, and the charts read only the field.
+  - Hand-typed text is kept as typed: decimals aren't split, there's no double
+    period after a sentence, and a phrase inside your own sentence isn't treated
+    as the chip. `js/notes.js`, 20 assertions.
+- **📈 on every row of the Exercises library**, beside Edit. Back from the chart
+  returns to the library. Each row is now two sibling buttons, since a 📈 inside
+  the old row-button would have been invalid HTML and fired Edit.
+
+### Changed
+- **Time between sets is on by default.** Turning it off is the opt-out.
+- **Gaps read `⏱ Rest: 4:07`**, not `⏱ 4:07`. Bare `4:07` looked like a time of
+  day. The toggle is renamed *Show rest between sets* to match.
+
+### Verified
+- Real app, clock faked to 10/05/26, read-only. Rest appeared with no setting
+  stored. The chip sequence produced exactly the expected comment text. 50 of 50
+  library rows have 📈, none nested. 📈 → chart → Back returned to the library.
+  No console errors, and the set count was the same before and after.
+
+---
+
+## [1.14.0] — 10/12/26
+
+### Added
+- **Time between sets.** Settings → Display → *Show time between sets*, **off by
+  default**. When on, every list of a day's sets shows the gap between
+  consecutive sets as a quiet timeline line: `⏱ 5:33`. That covers the Log tab,
+  "Today so far", History, both exercise columns (today and last time) and a
+  chart's tapped day.
+  - Not pure rest: only a set's *end* is recorded, so the gap includes the time
+    the next set took. The Settings hint and the hover text both say so.
+  - A negative gap, from two phones' clocks disagreeing by a few seconds, is
+    left blank rather than shown as nonsense.
+  - `js/rest.js`, 20 assertions.
+
+### Changed
+- **"Entered by" is quiet now.** The gold `entered by Chamuth` pill is replaced
+  by a small outline phone and the name in faint grey, because who typed a set is
+  the least important thing on the row. A phone because that's what the field
+  records: whose phone the set came from. A person glyph would read as *whose
+  set*, and a pen would collide with ✎. It's drawn as SVG because Android renders
+  📱 in full colour.
+- Every set list now goes through one helper (`appendSets`), so warm-up
+  numbering and rest gaps behave the same everywhere. That replaces six
+  hand-written loops.
+
+### Fixed
+- **The Log and History tabs ordered sets by server time.** After an offline
+  session `createdAt` is the moment the phone reconnected, which could display a
+  basement workout out of order. Every list now sorts by when the set was logged.
+- "Last time" and a chart's tapped day sorted older sets, which only have
+  `createdAt`, as time 0, which scrambled their order.
+- "Last time" could pick a session dated *after* the day asked about. It's
+  documented as strictly earlier, and now is.
+
+### Verified
+- Real app, clock faked to 10/05/26, read-only. 13 rest gaps on the Log tab and 8
+  in the columns, none overflowing. 17 phone-icon attributions, which matches the
+  17 sets the device analysis traced from Chamuth's Galaxy into Prabhashwara's
+  profile that day. No gold pills remain, and no console errors.
+
+---
+
+## [1.13.0] — 10/12/26
+
+### Added
+- **✎ on today's sets in the exercise columns**, right where you've just logged
+  them. That's where a missed Failure tag or a wrong unit gets caught, seconds
+  later. Cancel and Save both return to the same exercise screen.
+  - Compact 26px button for the half-width columns. The standard 34px one would
+    have roughly doubled each row; 26px still clears the 24px minimum tap target.
+  - Checked on the real app with the clock set to 10/10/26 so real rows existed:
+    every row 35px, no overflow, every button inside its column, including the
+    widest row `25 kg/side ×28`. No console errors, and Save was never pressed.
+
+---
+
+## [1.12.0] — 10/12/26
+
+### Added
+- **Edit any logged set.** A ✎ button on sets in the Log tab, the set form's
+  "Today so far", History, and the tapped day on a progress chart. It opens the
+  same form, prefilled, with the **whole page turned gold** — tokens overridden
+  so every card and line follows — a banner naming whose set and when it was
+  logged, a gold **Save changes** and a red **Cancel without saving**.
+  - **An edit changes the numbers only.** `js/edits.js` limits it to weight,
+    unit, reps, half reps, time, side flags, support, warm-up, comment and drops.
+    It never writes when the set was logged, who typed it, which phone, the
+    person, the day, the exercise, or how it is counted. Rewriting `loggedAt`
+    would make a month-old set glow as fresh and move it in time.
+    Records `editedAt`, `editedBy` and `editedDeviceId` alongside instead.
+  - **Changing the unit keeps the number.** An edit usually fixes a wrong unit
+    tap, so 75 kg → lb stays 75. When adding, the value still snaps to the new
+    unit's grid. Without this, a 12.5 kg mistake corrected to lb would have
+    become 15 lb.
+  - Save with no changes writes nothing and stamps no `editedAt`.
+  - Edited sets say so: `edited by Prabhashwara · 2m ago` in lists, an `edited`
+    tag on tiles.
+  - The progress chart's wrong-unit note now ends "Tap ✎ on a set to correct it."
+  - Edit mode was contrast-checked: weakest text pair 4.69:1. The accent turns
+    gold too, since purple text fell to 4.06:1 on the gold panels.
+
+### Fixed
+- **A set arriving from the other phone could wipe a form mid-entry.** The guard
+  that stops live updates from rebuilding the screen only noticed *typing*.
+  Stepper taps, unit buttons and toggles don't fire `input`, so tapping `+`
+  while the other person logged a set reset your form. It now counts any
+  interaction, and covers the edit screen as well as the add screen.
+
+### Verified
+- 25 edit-safety assertions, including that no protected field ever reaches the
+  patch.
+- Real app, headless, on the actual 09/21/26 set: prefill, gold theme, the
+  unit-keeps-number behaviour, Cancel, and the add form unchanged, with no
+  console errors. **Save was deliberately never pressed.** The set's server
+  `updateTime` was identical before and after, so nothing was written.
+
+---
+
+## [1.11.0] — 10/12/26
+
+### Added
+- **Progress graphs.** A **📈 Progress** button on the exercise screen opens a
+  chart of both people on one plot — the same two as the columns. Built to
+  `docs/graphs-spec.md`.
+  - Metrics: **Top weight** (default), **Reps** — reps at the heaviest set, not
+    total reps, which only tracks how many sets you did — and **Volume**.
+    Timed exercises get Longest hold / Total time; bodyweight gets Reps.
+  - One unit per chart: kg and lb mixed → kg; blocks stay `#` and are never
+    converted. Per-side weights are plotted as logged, with the axis saying so.
+  - Warm-ups excluded. Drop sets count toward Volume only. Assisted reps get a
+    hollow dot; failure gets no mark (23% of sets are failure).
+  - Real calendar x-axis, so rest days show as gaps and two people on different
+    days line up. Labels read `Wed` over `10/05/26` and thin out rather than
+    collide.
+  - One session shows a stat tile instead of a one-dot chart.
+  - Tap a point to see that day's sets exactly as logged. A table underneath
+    gives every value without tapping.
+  - **Sets that look logged in the wrong unit get a dashed ring.** Written for
+    09/21/26, where 65/75/75 lb dumbbells went in as kg and would otherwise draw
+    a 60% collapse in two days.
+  - Colours run through the palette validator against the chart surface: purple
+    `#a855f7` and a deeper gold `#c08812`, ΔE 32.8 for colour-blind separation.
+    The UI gold `#f0b429` failed the dark-mode lightness check. ● and ◆ markers,
+    so identity is never colour alone.
+- **Settings → Count this device in usage stats.** Turn it off on a laptop you
+  test on — desktop sessions were mixed into the data used to tell the two phones
+  apart.
+- `js/progress.js` (pure, 76 assertions) and `js/chart.js` (inline SVG, no
+  library, no extra download).
+
+### Verified
+- Rendered headless in Chrome against the live data and inspected. Six chart
+  shapes, then the real app driven through its toggle and a tapped point, with
+  zero console errors. The visual pass caught five layout bugs the unit tests
+  could not: clipped end labels, half-step ticks on a blocks axis, a misplaced
+  empty-cell dash in the table, chart-only notes under tiles, and a suspect ring
+  overlapping the y labels.
+- The usage opt-out was confirmed by counting usage records before and after a
+  full app load: 29 → 29.
+
+---
+
+## [1.10.1] — 10/12/26
+
+### Fixed
+- **Some words could not find exercises that contained them.** Reported as
+  "search should be case insensitive" — but search was already case-insensitive
+  in every casing tested. The real cause was the synonym map, which *replaced*
+  the typed word instead of adding alternatives. Searching every live exercise
+  by each word of its own name (621 queries) found four dead words:
+
+  | typed      | was searched as | so it missed                        |
+  |------------|-----------------|-------------------------------------|
+  | `calf`     | `calves`        | Calf raises seated machine (pwg37)  |
+  | `bicep`    | `biceps`        | Incline dumbbell bicep curls        |
+  | `dumbell`  | `dumbbell`      | 30 deg bent over dumbell shrugs     |
+  | `pulldown` | `pull down`     | Single arm lat pulldown             |
+
+  Each failed identically in every casing; a phone keyboard capitalising the
+  first letter made it look like a case problem.
+- Replaced with **synonym groups**: the typed word is always searched as typed,
+  and each group only adds alternatives, in both directions. Alternatives match
+  whole words only — otherwise `hamstrings` expands to `ham`, prefix-matches
+  `hammer`, and surfaces Hammer curl.
+- Muscle matching changed from substring to word-prefix. Once short words like
+  `tri` became searchable in their own right, `tri` matched the middle of
+  `hams-tri-ngs` and ranked Leg curl first for `tricep`.
+
+### Tests
+- 20 new search assertions: every casing identical, the four dead words, both
+  directions of each spelling pair, and the two stray-match cases above.
+
+---
+
+## [1.10.0] — 10/12/26
+
+### Changed
+- **"Last time" in each column is now a tile per set, not a bare number list.**
+  Found in real use: last time's warm-up carried no marker, so a light first set
+  read as a heavy working set — "did I really push that much on set one?"
+  - Warm-ups show a gold `W` in the index, a dashed `warm-up` tag, and a receding
+    load. Working sets are numbered from 1, skipping warm-ups, matching today's.
+  - Tags for support level (`Light`, `Supped`) and **`Failure`** in red, plus
+    `drop`. `No sup` is omitted — it is the default, and printing it on every row
+    would bury the tags that matter.
+  - Drop sets show their detail: `↳ #5 ×8`.
+  - **The free-text note is shown**, indented under the load.
+- Today's rows in the column stay compact — you entered them minutes ago and are
+  scanning fast — but share the same renderer, so both line up identically.
+- Both now show `ea` for each-side sets. The old compact form dropped it, so
+  `12 each side` displayed as `×12`, indistinguishable from twelve total.
+
+### Added
+- `formatEffortCompact()` for half-width columns: `×12+1h ea`, `×1:30`.
+- **The pre-push gate now lives in the repo** (`scripts/`, `npm run check`). It
+  had been kept in a scratch directory and was wiped between sessions twice.
+  Also now waits for the server to be ready instead of sleeping a fixed second,
+  and kills it by PID rather than by pattern.
+
+---
+
+## [1.9.1] — 09/26/26
+
+### Added
+- **`deviceId` on every set.** 1.9.0 added it to usage documents only, so 104
+  logged sets carried no device information at all.
+
+  This matters because `enteredBy` is only as honest as the device-owner
+  setting. 22 sets recorded `enteredBy: "Chamuth"` when they had in fact been
+  typed by Prabhashwara on his own phone with the owner temporarily switched —
+  and that was briefly read as evidence Chamuth had been using the app. He had
+  not. With `deviceId` stored alongside, the two can be compared and a
+  mislabelled batch is obvious.
+
+  Read from `localStorage` directly rather than via the usage tracker, so a set
+  logged before tracking starts is still attributable.
+
+---
+
 ## [1.9.0] — 09/24/26
 
 ### Added

@@ -1,5 +1,5 @@
 import { stepFor, snapTo, normalizedKg, setVolumeKg, formatLoad, formatSetLoad,
-         formatReps, formatEffort, formatDuration, totalReps, TIME_STEP } from '../js/units.js';
+         formatReps, formatEffort, formatEffortCompact, formatDuration, totalReps, TIME_STEP } from '../js/units.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -70,6 +70,16 @@ console.log('\nbodyweight shows BW instead of a load\n');
 eq('BW',        formatSetLoad({ bodyweight: true, weight: 0, unit: 'kg' }), 'BW');
 eq('17.5 kg',   formatSetLoad({ bodyweight: false, weight: 17.5, unit: 'kg', perSide: false }), '17.5 kg');
 eq('#5',        formatSetLoad({ weight: 5, unit: 'block', perSide: false }), '#5');
+
+console.log('\nformatEffortCompact — half-width columns\n');
+eq('plain reps',              formatEffortCompact({ reps: 12 }), '×12');
+eq('half reps',               formatEffortCompact({ reps: 12, halfReps: 1 }), '×12+1h');
+// the earlier compact form dropped this, so 12 each side read as 12 total
+eq('each side kept',          formatEffortCompact({ reps: 12, unilateral: true }), '×12 ea');
+eq('half reps and each side', formatEffortCompact({ reps: 10, halfReps: 2, unilateral: true }), '×10+2h ea');
+eq('timed',                   formatEffortCompact({ metric: 'time', seconds: 90 }), '×1:30');
+eq('timed each side',         formatEffortCompact({ metric: 'time', seconds: 45, unilateral: true }), '×45s ea');
+eq('missing reps is 0, not NaN', formatEffortCompact({}), '×0');
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

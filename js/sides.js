@@ -1,3 +1,5 @@
+import { byTime } from './rest.js';
+
 // Who appears on which side of the two-sided exercise view.
 //
 // Pure: no DOM, no Firestore, no globals. This is the logic that was wrong on
@@ -50,9 +52,12 @@ export function resolveTarget(profiles = [], profileId = null, fallbackId = null
  */
 export function lastSessionFor(sets = [], { exerciseId, profileId, excludeDate } = {}) {
   const prior = sets
+    // Strictly BEFORE the given day, as documented. It used to exclude only
+    // that exact date, so a phone with a wrong clock — or a test with a faked
+    // one — could show a later session as "last time".
     .filter((s) => s.exerciseId === exerciseId
                 && s.profileId === profileId
-                && s.date !== excludeDate)
+                && (!excludeDate || s.date < excludeDate))
     .sort((a, b) => b.date.localeCompare(a.date));
   if (!prior.length) return null;
 
@@ -61,6 +66,8 @@ export function lastSessionFor(sets = [], { exerciseId, profileId, excludeDate }
     date,
     sets: prior
       .filter((s) => s.date === date)
-      .sort((a, b) => (a.loggedAt || 0) - (b.loggedAt || 0)),
+      // byTime, not loggedAt alone: older sets only carry createdAt, and
+      // sorting them as 0 scrambled their order.
+      .sort(byTime),
   };
 }

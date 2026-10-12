@@ -118,6 +118,9 @@ eq('no history -> null',
 eq('empty pool -> null, no crash',
   lastSessionFor([], { exerciseId: 'e1', profileId: 'p1', excludeDate: TODAY }), null);
 
+eq('a session dated AFTER the given day is never "last time"', lastSessionFor(
+  [...POOL, { profileId: 'p1', exerciseId: 'e1', date: '2026-09-30', weight: 99, loggedAt: 9 }],
+  { exerciseId: 'e1', profileId: 'p1', excludeDate: '2026-09-25' }).date, '2026-09-22'); // 09/22 is the latest before 09/25; 09/30 must be skipped
 eq('sets come back in logging order',
   lastSessionFor(POOL, { exerciseId: 'e1', profileId: 'p2', excludeDate: TODAY }).sets.map((s) => s.loggedAt),
   [1, 2]);

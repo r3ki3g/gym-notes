@@ -6,6 +6,10 @@
   --gold:#f0b429; --gold-dim:#3a2c0c;
   --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
   --radius:12px; --tap:46px;
+  /* chart series — run through the palette validator against the chart surface
+     #13101c: all five checks pass, colour-blind separation dE 32.8. The UI gold
+     #f0b429 failed the dark-mode lightness band, hence the deeper gold here. */
+  --series-me:#a855f7; --series-them:#c08812;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -143,13 +147,22 @@ select{min-height:var(--tap)}
 .side-tag{font-size:.6rem;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
 .side.me .side-tag{color:var(--accent)}
 .side-set{
-  display:flex;gap:6px;align-items:baseline;font-size:.8rem;
+  font-size:.8rem;
   padding:4px 0 4px 7px;margin-left:-7px;
   border-bottom:1px solid rgba(255,255,255,.04);
 }
 .side-set:last-of-type{border-bottom:0}
-.side-set .n{color:var(--faint);font-size:.68rem;min-width:12px;font-variant-numeric:tabular-nums}
-.side-set .load{font-weight:700;font-variant-numeric:tabular-nums}
+
+/* Shared by today's compact rows and last time's tiles, so the index, load and
+   reps column line up identically in both. */
+.tile-head{display:flex;gap:6px;align-items:baseline}
+.tile-head .n{color:var(--faint);font-size:.68rem;min-width:12px;font-variant-numeric:tabular-nums}
+.tile-head .n.n-warm{color:var(--warn);font-weight:800}
+.tile-head .load{font-weight:700;font-variant-numeric:tabular-nums}
+
+/* A warm-up must not read as a heavy working set — the exact confusion this
+   change exists for. Gold W in the index plus a receding load. */
+.is-warm .load,.is-warm .muted{opacity:.5}
 .side-set.fresh-other{box-shadow:inset 3px 0 0 0 var(--gold);background:rgba(240,180,41,.07);border-radius:3px}
 .side-set.fresh-own{box-shadow:inset 3px 0 0 0 var(--accent);border-radius:3px}
 .side-empty{color:var(--faint);font-size:.75rem;padding:8px 0;text-align:center}
@@ -171,8 +184,31 @@ select{min-height:var(--tap)}
 
 .side-last{margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}
 .side-last-when{font-size:.65rem;color:var(--faint);letter-spacing:.03em;margin-bottom:3px}
-.side-last-set{display:flex;gap:5px;align-items:baseline;font-size:.76rem;color:var(--dim)}
-.side-last-set .load{font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
+/* last-time tiles: tags, drop detail and note, indented under the load so the
+   index column stays clean for scanning */
+.tile{
+  font-size:.76rem;color:var(--dim);
+  padding:6px 0 6px 7px;margin-left:-7px;
+  border-bottom:1px solid rgba(255,255,255,.04);
+}
+.tile:last-child{border-bottom:0}
+.tile .tile-head .load{color:var(--text);font-weight:600}
+.tile-tags{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 0 18px}
+.tile-drop{margin:3px 0 0 18px;color:var(--warn);font-size:.72rem;font-variant-numeric:tabular-nums}
+.tile-note{
+  margin:4px 0 0 18px;color:var(--dim);font-size:.74rem;line-height:1.4;
+  font-style:italic;word-wrap:break-word;overflow-wrap:anywhere;
+}
+
+.tag{
+  display:inline-block;font-size:.58rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--dim);line-height:1.3;
+}
+/* dashed: a warm-up "does not count", which a solid tag would not say */
+.tag-warm{color:var(--faint);border-style:dashed}
+.tag-sup{color:var(--warn);border-color:#4a3c18}
+.tag-fail{color:var(--bad);border-color:#4a2230}
+.tag-drop{color:var(--accent);border-color:#3b2d55}
 
 .side-add{
   width:100%;margin-top:8px;background:var(--panel-2);border:1px solid var(--line);
@@ -215,7 +251,9 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .forwho.other strong{color:var(--gold)}
 .forwho.other .tiny{color:#b99a4e}
 
-.pill.by{border-color:var(--gold);color:var(--gold);background:var(--gold-dim);font-weight:600}
+/* who typed it: quiet on purpose — it is the least important thing on the row */
+.by{display:inline-flex;align-items:center;gap:3px;color:var(--faint);font-size:.74rem;white-space:nowrap}
+.by-icon{width:8px;height:11px;fill:none;stroke:currentColor;stroke-width:1.3;flex:none}
 
 /* the profile chip goes gold whenever you are logging for someone else */
 .chip.viewing{border-color:#43395c;color:var(--text);background:transparent}
@@ -254,13 +292,20 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 /* Management rows look nothing like the picker above: flat, hairline-separated,
    with an explicit Edit affordance, so nobody taps one expecting to log a set. */
 .manage-list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
-.manage-row{
-  display:flex;align-items:center;gap:11px;width:100%;text-align:left;
-  background:transparent;border:0;border-bottom:1px solid var(--line);
-  padding:12px 13px;
-}
+/* A row is two sibling buttons — edit (the wide part) and a 📈 chart — since a
+   button cannot contain another. */
+.manage-row{display:flex;align-items:stretch;border-bottom:1px solid var(--line)}
 .manage-row:last-child{border-bottom:0}
-.manage-row:active{background:var(--panel-2)}
+.manage-main{
+  flex:1;min-width:0;display:flex;align-items:center;gap:11px;text-align:left;
+  background:transparent;border:0;padding:12px 13px;color:inherit;
+}
+.manage-main:active{background:var(--panel-2)}
+.manage-chart{
+  flex:none;width:50px;background:transparent;border:0;border-left:1px solid var(--line);
+  font-size:1.1rem;line-height:1;
+}
+.manage-chart:active{background:var(--panel-2)}
 .manage-row .name{font-weight:500;font-size:.94rem}
 .manage-row .meta{color:var(--faint);font-size:.74rem;margin-top:3px}
 .edit-tag{
@@ -377,4 +422,164 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
   .splash-name,.splash-pro::after,.splash-progress::after{animation:none}
   .splash-name{background-position:50% 0}
   .splash-progress::after{width:100%}
+}
+
+
+/* ---------- progress chart ---------- */
+.chart-card{padding:12px 10px 10px}
+.plot{width:100%;overflow:hidden;position:relative;isolation:isolate}
+.chart{display:block;font-family:inherit}
+.chart .grid line{stroke:var(--line);stroke-width:1}
+.chart .xtick{stroke:var(--line);stroke-width:1}
+.chart .tick{fill:var(--faint);font-size:10px;font-variant-numeric:tabular-nums}
+.chart .tick-day{fill:var(--dim);font-weight:600}
+.chart .axis-title{fill:var(--dim);font-size:10px;font-weight:600;letter-spacing:.04em}
+.chart .line{stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+/* paint-order puts the surface-coloured stroke BEHIND the fill: the marker keeps
+   its full size and gains a 2px ring that separates it from an overlapping one */
+.chart .mark{stroke:var(--panel);stroke-width:4;paint-order:stroke}
+.chart .mark.hollow{fill:var(--panel);stroke-width:2;paint-order:normal}
+.chart .s-me .line{stroke:var(--series-me)}
+.chart .s-me .mark{fill:var(--series-me)}
+.chart .s-me .mark.hollow{fill:var(--panel);stroke:var(--series-me)}
+.chart .s-them .line{stroke:var(--series-them)}
+.chart .s-them .mark{fill:var(--series-them)}
+.chart .s-them .mark.hollow{fill:var(--panel);stroke:var(--series-them)}
+.chart .suspect-ring{fill:none;stroke:var(--warn);stroke-width:1.5;stroke-dasharray:3 2}
+.chart .sel-ring{fill:none;stroke:var(--text);stroke-width:1.5}
+.chart .end-name{fill:var(--text);font-size:10.5px;font-weight:700}
+.chart .end-value{fill:var(--dim);font-size:10px;font-variant-numeric:tabular-nums}
+.chart .hit{fill:transparent;cursor:pointer;outline:none}
+.chart .hit:focus-visible{stroke:var(--text);stroke-width:1.5}
+
+.legend{display:flex;gap:14px;justify-content:center;margin:0 0 6px;font-size:.78rem;color:var(--dim)}
+.legend-item{display:inline-flex;align-items:center;gap:6px}
+.swatch{display:inline-block;width:9px;height:9px;flex:none}
+.swatch.dot{border-radius:50%}
+.swatch.diamond{transform:rotate(45deg);width:8px;height:8px}
+.swatch.s-me{background:var(--series-me)}
+.swatch.s-them{background:var(--series-them)}
+
+.tiles{display:flex;gap:9px}
+.tile-stat{flex:1;min-width:0;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:11px}
+.tile-stat-who{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--dim);margin-bottom:6px}
+.tile-stat-val{font-size:1.15rem;font-weight:800;font-variant-numeric:tabular-nums}
+
+.chart-notes{margin-top:8px;font-size:.7rem;color:var(--faint);text-align:center;line-height:1.5}
+.suspect-note{
+  background:var(--panel-2);border:1px dashed var(--warn);border-radius:8px;
+  padding:8px 10px;margin-bottom:8px;font-size:.78rem;color:var(--warn);
+}
+.suspect-mark{color:var(--warn);font-weight:800}
+
+.ptable{width:100%;border-collapse:collapse;font-size:.82rem}
+.ptable th{text-align:left;font-size:.68rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:0 0 6px}
+.ptable td{padding:7px 0;border-top:1px solid var(--line)}
+.ptable .num{text-align:right;font-variant-numeric:tabular-nums}
+
+
+/* ---------- editing an existing set ----------
+   The whole page turns gold, by overriding the tokens, so every card, line and
+   panel follows and nobody mistakes correcting a record for adding one. Every
+   text/surface pair was checked: weakest is faint on panel-2 at 4.69:1. The
+   accent goes gold too — purple text fell to 4.06:1 here, and gold already
+   means "this is an edit". */
+body.is-editing{
+  --bg:#120d05; --panel:#1e170a; --panel-2:#251c0b; --line:#4d3c17;
+  --accent:#f0b429; --accent-ink:#17082b;
+  background:var(--bg);
+}
+.edit-form{border-color:var(--gold);box-shadow:0 0 0 1px rgba(240,180,41,.25)}
+.edit-banner{
+  display:flex;gap:11px;align-items:center;
+  margin:-3px -3px 14px;padding:10px 12px;border-radius:9px;
+  background:var(--gold-dim);border:1px solid var(--gold);color:var(--gold);
+}
+.edit-banner strong{color:var(--gold);font-size:.95rem}
+.edit-banner .tiny{color:#d8b968;font-size:.74rem;margin-top:1px}
+.edit-banner-icon{font-size:1.4rem;line-height:1;flex:none}
+.btn.gold{background:var(--gold);color:#2b1f02;border-color:var(--gold)}
+.btn.edit-btn{color:var(--dim);min-width:34px;padding:0 8px}
+/* Compact for the half-width columns: the standard 34px button roughly doubled
+   each row's height. 26px still clears the 24px minimum tap target. */
+.side-set .btn.edit-btn{min-width:26px;min-height:26px;height:26px;padding:0 6px;font-size:.78rem;border-radius:6px;align-self:center}
+.side-set .tile-head{align-items:center}
+.tag-edited{color:var(--gold);border-color:#5a4512}
+
+/* time between consecutive sets: a quiet timeline gap, not a row of its own */
+.rest-gap{
+  display:flex;align-items:center;gap:6px;
+  padding:1px 0 1px 7px;margin-left:-7px;
+  font-size:.68rem;color:var(--faint);font-variant-numeric:tabular-nums;
+}
+.rest-gap::after{content:"";flex:1;border-top:1px dashed var(--line);margin-left:2px}
+.rest-gap-icon{font-size:.72rem;opacity:.75}
+
+/* quick-add notes: one sideways-scrolling row, so they cost a single line of
+   height however many there are. Bleeds to the card edges so the scroll does. */
+.chips{
+  display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+  margin:-4px -13px 12px;padding:0 13px 2px;-webkit-overflow-scrolling:touch;
+}
+.chips::-webkit-scrollbar{display:none}
+.chip-q{
+  flex:none;min-height:26px;padding:3px 10px;border-radius:999px;
+  border:1px solid var(--line);background:var(--panel-2);color:var(--dim);
+  font-size:.72rem;line-height:1.3;white-space:nowrap;
+}
+.chip-q.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb, var(--accent) 13%, transparent)}
+
+/* ---------- chart entrance (Settings → Animate charts) ----------
+   A colour glide sweeps left to right, each line draws itself in, and the dots
+   drop into place with a little bounce, starting white and settling into their
+   colour as the line reaches them. Plays when a chart first appears or its
+   metric changes, not on every tap. Every delay subtracts --t, so a chart
+   rebuilt partway through (a set syncing in) carries on instead of snapping. */
+.plot.animate::before{
+  /* behind the chart (z-index -1 inside .plot's own stacking context), so it can
+     be bright without washing out the lines and dots it passes. Slow on
+     purpose: at 1.1s and 15% the first version was barely noticed. */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:-1;
+  background:linear-gradient(100deg,
+    transparent 12%,
+    color-mix(in srgb, var(--series-me) 34%, transparent) 40%,
+    color-mix(in srgb, var(--series-them) 30%, transparent) 60%,
+    transparent 88%);
+  transform:translateX(-100%);
+  animation:chart-glide 2600ms cubic-bezier(.45,.05,.35,1) both;
+  animation-delay:calc(0ms - var(--t, 0ms));
+}
+@keyframes chart-glide{to{transform:translateX(100%)}}
+
+.chart.animate .line{
+  stroke-dasharray:var(--len);stroke-dashoffset:var(--len);
+  /* even pace, so the dots (spread over the same 900ms) keep a steady beat behind it */
+  animation:chart-draw 900ms linear forwards;
+  animation-delay:calc(0ms - var(--t, 0ms));
+}
+@keyframes chart-draw{to{stroke-dashoffset:0}}
+
+.chart.animate .mark{
+  transform-box:fill-box;transform-origin:center;
+  animation:chart-drop 460ms cubic-bezier(.34,1.45,.55,1) both;
+  animation-delay:calc(var(--d, 0ms) - var(--t, 0ms));
+}
+@keyframes chart-drop{from{opacity:0;transform:translateY(-18px) scale(.55);fill:var(--text)}}
+
+.chart.animate .suspect-ring{
+  animation:chart-fade 400ms ease-out both;
+  animation-delay:calc(var(--d, 0ms) + 300ms - var(--t, 0ms));
+}
+.chart.animate .end-name{animation:chart-fade 450ms ease-out both;animation-delay:calc(700ms - var(--t, 0ms))}
+.chart.animate .end-value{animation:chart-fade 450ms ease-out both;animation-delay:calc(760ms - var(--t, 0ms))}
+@keyframes chart-fade{from{opacity:0}}
+
+/* honoured even with the toggle on: the OS setting outranks a preference */
+@media (prefers-reduced-motion:reduce){
+  .plot.animate::before{display:none}
+  .chart.animate .line{animation:none;stroke-dasharray:none;stroke-dashoffset:0}
+  .chart.animate .mark{animation:none}
+  .chart.animate .suspect-ring{animation:none}
+  .chart.animate .end-name{animation:none}
+  .chart.animate .end-value{animation:none}
 }

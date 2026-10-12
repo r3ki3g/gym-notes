@@ -102,6 +102,20 @@ export function formatSetLoad(set) {
   return formatLoad(set.weight, set.unit, set.perSide);
 }
 
+/**
+ * Half-width version of formatEffort for the two-sided columns: "×12+1h ea",
+ * "×1:30". The full "12 + 1 half reps each side" wraps to three lines at that
+ * width. Keeps "ea" because 12 each side is not 12 — dropping it was a real gap
+ * in the earlier compact form.
+ */
+export function formatEffortCompact(set) {
+  if (isTimed(set)) return '×' + formatDuration(set.seconds) + (set.unilateral ? ' ea' : '');
+  let s = '×' + (set.reps || 0);
+  if (set.halfReps) s += `+${set.halfReps}h`;
+  if (set.unilateral) s += ' ea';
+  return s;
+}
+
 /** Whatever this set is counted in — reps or a duration. */
 export function formatEffort(set) {
   return isTimed(set) ? formatDuration(set.seconds) : formatReps(set);

@@ -4,7 +4,12 @@ import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, MUSCLES } from './search.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
-import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatDuration, setVolumeKg,
+import { CHART_METRICS, buildProgress } from './progress.js';
+import { draftFromSet, editPatch, changedFields } from './edits.js';
+import { byTime, restGaps, formatRest } from './rest.js';
+import { QUICK_NOTES, hasNote, toggleNote } from './notes.js';
+import { drawChart, formatValue } from './chart.js';
+import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatEffortCompact, formatDuration, setVolumeKg,
          SUPPORT, METRICS, TIME_STEP, stepFor, snapTo } from './units.js';
 import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper, fmtTime, fmtSpan } from './ui.js';
 import { VERSION } from './version.js';
@@ -72,7 +77,15 @@ function setProfile(id) {
 const route = () => (location.hash || '#/log').slice(2).split('/');
 const go = (path) => { location.hash = '#/' + path; };
 
+// The previous in-app location. An edit can be opened from Log, History or a
+// progress chart, and Save / Cancel should return to whichever it came from.
+let prevHash = null;
+let curHash = location.hash;
+
 window.addEventListener('hashchange', () => {
+  prevHash = curHash;
+  curHash = location.hash;
+  if (route()[0] !== 'progress') animatedKey = null;
   formDirty = false;
   tracker?.screen(route()[0] || 'log');
   render();
@@ -88,7 +101,9 @@ setInterval(() => { if (route()[0] === 'alerts') render(); }, 15000);
  * (save, or leaving the screen) picks the new data up.
  */
 function renderFromData() {
-  if (route()[0] === 'set' && formDirty) return;
+  // Both forms: a set arriving from the other phone must not rebuild the DOM
+  // and wipe input in progress — whether adding a set or correcting one.
+  if ((route()[0] === 'set' || route()[0] === 'edit') && formDirty) return;
   render();
 }
 
@@ -161,6 +176,8 @@ const splashFailsafe = setTimeout(() => {
 function render() {
   paintTopbar();
   formDirty = false;
+  // Gold for the whole page while editing, so nobody mistakes it for adding.
+  document.body.classList.toggle('is-editing', route()[0] === 'edit');
   if (state.loaded.profiles && state.owner) { startRecentWatch(); primeAudio(); startUsage(); }
   const v = clear(viewEl());
   const [tab, arg, arg2] = route();
@@ -180,8 +197,10 @@ function render() {
     case 'profiles':  return viewSettings(v);
     case 'search':    return viewSearch(v);
     case 'set':       return viewLogSet(v, arg, arg2);
+    case 'edit':      return viewEditSet(v, arg);
     case 'history':   return viewHistory(v);
     case 'ex':        return viewExercise(v, arg);
+    case 'progress':  return viewProgress(v, arg);
     case 'exercises': return arg ? viewExerciseEditor(v, arg) : viewExercisePool(v);
     default:          return viewLog(v);
   }
@@ -252,6 +271,13 @@ let usageStartedAt = 0;
 let usageTimer = null;
 
 /**
+ * This device's stable id. Reads storage directly rather than going through
+ * usageDevice, so a set logged before usage tracking has started is still
+ * attributable.
+ */
+const currentDeviceId = () => usageDevice?.id || deviceId(localStorage);
+
+/**
  * Flush the accumulated summary. Only ever called while the page is visible, or
  * once on the way out — never on a timer that keeps firing in the background.
  */
@@ -276,8 +302,15 @@ async function flushUsage() {
   }
 }
 
+/**
+ * Per-device opt-out. Testing on a laptop otherwise lands in the same usage
+ * data used to see who is really using the app — the first device analysis
+ * found desktop Chrome and Firefox sessions mixed in with the two phones.
+ */
+const usageCounted = () => { try { return localStorage.getItem('gn.noUsage') !== '1'; } catch { return true; } };
+
 function startUsage() {
-  if (tracker) return;
+  if (tracker || !usageCounted()) return;
 
   usageBrowser = parseBrowser(navigator.userAgent);
 
@@ -511,6 +544,34 @@ function viewSettings(v) {
     } }, 'Change')
   ));
 
+  v.append(toggleRow(
+    'Count this device in usage stats',
+    'Turn off on a laptop you test on, so only real use is counted',
+    usageCounted,
+    (on) => {
+      try { on ? localStorage.removeItem('gn.noUsage') : localStorage.setItem('gn.noUsage', '1'); } catch {}
+      // Takes effect from the next app load; a session already running finishes
+      // rather than being cut off mid-record.
+      toast(on ? 'Counted from the next reload' : 'Not counted from the next reload');
+    }
+  ));
+
+  // --- display -------------------------------------------------------------
+  v.append(el('h3', {}, 'Display'));
+  v.append(toggleRow(
+    'Show rest between sets',
+    'From one logged set to the next — includes the set itself, since only the end of a set is recorded',
+    restOn,
+    (on) => { try { localStorage.setItem('gn.showRest', on ? '1' : '0'); } catch {} }
+  ));
+
+  v.append(toggleRow(
+    'Animate charts',
+    'Lines draw in and dots drop into place when a chart opens',
+    chartAnimOn,
+    (on) => { try { localStorage.setItem('gn.chartAnim', on ? '1' : '0'); } catch {} }
+  ));
+
   // --- alerts --------------------------------------------------------------
   v.append(el('h3', {}, 'Alerts'));
   v.append(toggleRow(
@@ -566,12 +627,64 @@ function groupIntoExercises(sets) {
   // Sets are flat; group by exercise preserving first-logged order.
   const order = [];
   const byEx = new Map();
-  const sorted = [...sets].sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+  // When each set was LOGGED, not when the server received it. After an
+  // offline session createdAt is the moment the phone reconnected, which
+  // could show a basement workout out of order.
+  const sorted = [...sets].sort(byTime);
   for (const s of sorted) {
     if (!byEx.has(s.exerciseId)) { byEx.set(s.exerciseId, []); order.push(s.exerciseId); }
     byEx.get(s.exerciseId).push(s);
   }
   return order.map((id) => ({ exerciseId: id, sets: byEx.get(id) }));
+}
+
+/**
+ * Who typed a set someone else entered: a small outline phone and the name, in
+ * faint ink. It used to be a gold "entered by X" pill, which shouted about the
+ * least important thing on the row.
+ *
+ * A phone because that is literally what the field records — whose phone the
+ * set was logged from. A person glyph would read as whose set it is, and a pen
+ * would collide with the ✎ edit button. Drawn as SVG rather than 📱 because
+ * Android renders emoji in full colour, which defeats "mild".
+ */
+function enteredOn(name) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(NS, 'svg');
+  icon.setAttribute('viewBox', '0 0 10 14');
+  icon.setAttribute('class', 'by-icon');
+  icon.setAttribute('aria-hidden', 'true');
+  const body = document.createElementNS(NS, 'rect');
+  for (const [k, v] of Object.entries({ x: 1, y: 1, width: 8, height: 12, rx: 1.8 })) body.setAttribute(k, v);
+  const speaker = document.createElementNS(NS, 'line');
+  for (const [k, v] of Object.entries({ x1: 4, x2: 6, y1: 10.6, y2: 10.6 })) speaker.setAttribute(k, v);
+  icon.append(body, speaker);
+  return el('span', { class: 'by', title: `Entered on ${name}'s phone` }, icon, name);
+}
+
+/** Settings → "Show time between sets". On by default — turning it off is the opt-out. */
+const restOn = () => { try { return localStorage.getItem('gn.showRest') !== '0'; } catch { return true; } };
+
+/**
+ * Appends each set's row in logging order, numbering working sets from 1 (a
+ * warm-up shows W and takes no number). When enabled, puts the time since the
+ * previous set between rows — every list that shows a day's sets goes through
+ * here, so numbering and gaps behave the same everywhere.
+ */
+function appendSets(container, sets, makeRow) {
+  const gaps = restOn() ? restGaps(sets) : [];
+  let n = 0;
+  sets.forEach((x, i) => {
+    if (gaps[i] != null) {
+      container.append(el('div', {
+        class: 'rest-gap',
+        title: 'Time since the previous set — includes the set itself, since only the end of a set is recorded',
+      // "Rest:" — a bare "4:07" read as a time of day, not a duration.
+      }, el('span', { class: 'rest-gap-icon' }, '⏱'), 'Rest: ' + formatRest(gaps[i])));
+    }
+    if (!x.warmup) n++;
+    container.append(makeRow(x, n));
+  });
 }
 
 function setLine(s, index, opts = {}) {
@@ -586,7 +699,7 @@ function setLine(s, index, opts = {}) {
       el('span', { class: 'muted' }, (s.metric === 'time' ? 'for ' : 'for ') + formatEffort(s)),
       s.support !== 'none' ? el('span', { class: 'tiny ' + sup.cls }, sup.label) : null,
       s.warmup ? el('span', { class: 'pill warmup' }, 'warm-up') : null,
-      byOther ? el('span', { class: 'pill by' }, 'entered by ' + s.enteredBy) : null
+      byOther ? enteredOn(s.enteredBy) : null
     )
   );
 
@@ -602,9 +715,16 @@ function setLine(s, index, opts = {}) {
     if (at) main.append(el('div', { class: 'set-at' }, fmtTime(at, true)));
   }
 
+  // A changed record says so — otherwise an edit is indistinguishable from the
+  // original entry, and nobody can tell numbers were corrected after the fact.
+  if (s.editedAt) {
+    main.append(el('div', { class: 'set-at' }, `edited${s.editedBy ? ' by ' + s.editedBy : ''} · ${timeAgo(s.editedAt)}`));
+  }
+
   return el('div', { class: 'set-line' + fresh.cls, style: fresh.style || null },
     el('span', { class: 'set-no' }, s.warmup ? 'W' : `${index}.`),
     main,
+    opts.onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: opts.onEdit }, '✎') : null,
     opts.onDelete ? el('button', { class: 'btn sm danger', onClick: opts.onDelete }, '✕') : null
   );
 }
@@ -646,18 +766,15 @@ function viewLog(v) {
       el('button', { class: 'btn sm', onClick: () => go('ex/' + grp.exerciseId) }, '+ set')
     ));
 
-    let n = 0;
-    for (const s of grp.sets) {
-      if (!s.warmup) n++;
-      card.append(setLine(s, n, {
+    appendSets(card, grp.sets, (s, n) => setLine(s, n, {
         ownerName: p.name,
+        onEdit: () => go('edit/' + s.id),
         onDelete: async () => {
           if (await confirmSheet('Delete this set?', formatSetLoad(s) + ' for ' + formatEffort(s))) {
             await S.deleteSet(s.id); toast('Set deleted');
           }
         }
       }));
-    }
     v.append(card);
   }
 }
@@ -720,13 +837,67 @@ function myProfile() {
 
 const setsFor = (profileId, exerciseId, date) => state.recent
   .filter((x) => x.profileId === profileId && x.exerciseId === exerciseId && x.date === date)
-  .sort((a, b) => (a.loggedAt || stampMs(a.createdAt) || 0) - (b.loggedAt || stampMs(b.createdAt) || 0));
+  .sort(byTime);
 
 /**
  * One person's column. `header` replaces the plain name when this side is
  * selectable, so the picker sits ON the column it controls — floating it above
  * both columns made it read as a global switch, which is what confused things.
  */
+/**
+ * Tags for a set: warm-up, support level, drop. "No sup" is omitted — it is the
+ * default, and printing it on every row would bury the ones that matter.
+ */
+function setTags(x) {
+  const tags = [];
+  if (x.warmup) tags.push(el('span', { class: 'tag tag-warm' }, 'warm-up'));
+  const sup = SUPPORT[x.support];
+  if (sup && x.support !== 'none') {
+    tags.push(el('span', { class: 'tag ' + (x.support === 'failure' ? 'tag-fail' : 'tag-sup') }, sup.label));
+  }
+  if ((x.drops || []).length) tags.push(el('span', { class: 'tag tag-drop' }, 'drop'));
+  if (x.editedAt) tags.push(el('span', { class: 'tag tag-edited' }, 'edited'));
+  return tags;
+}
+
+/**
+ * One set in a half-width column.
+ *
+ * `rich` adds tags, drop detail and the comment — used for last time, which is
+ * exactly where you have forgotten the context. A warm-up there without its
+ * marker reads as a heavy working set; that is the confusion this exists to stop.
+ * Today's rows stay compact: you entered them minutes ago and are scanning fast.
+ */
+function columnSetRow(x, n, { rich = false, onEdit = null } = {}) {
+  const fresh = freshAttrs(x);
+  const idx = el('span', { class: 'n' + (x.warmup ? ' n-warm' : '') }, x.warmup ? 'W' : String(n));
+  const head = el('div', { class: 'tile-head' },
+    idx,
+    el('span', { class: 'load' }, formatSetLoad(x)),
+    el('span', { class: 'muted' }, formatEffortCompact(x)),
+    !rich && (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null,
+    onEdit ? el('span', { class: 'grow' }) : null,
+    onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: onEdit }, '✎') : null
+  );
+
+  if (!rich) {
+    return el('div', { class: 'side-set' + (x.warmup ? ' is-warm' : '') + fresh.cls, style: fresh.style || null }, head);
+  }
+
+  const tile = el('div', { class: 'tile' + (x.warmup ? ' is-warm' : '') }, head);
+
+  const tags = setTags(x);
+  if (tags.length) tile.append(el('div', { class: 'tile-tags' }, ...tags));
+
+  for (const d of x.drops || []) {
+    tile.append(el('div', { class: 'tile-drop' },
+      '\u21b3 ' + formatLoad(d.weight, d.unit, x.perSide) + ' \u00d7' + d.reps + (d.halfReps ? `+${d.halfReps}h` : '')));
+  }
+
+  if (x.comment) tile.append(el('div', { class: 'tile-note' }, x.comment));
+  return tile;
+}
+
 function sideColumn(profile, exerciseId, date, isMe, header) {
   const sets = setsFor(profile.id, exerciseId, date);
   const col = el('div', { class: 'side' + (isMe ? ' me' : '') });
@@ -741,19 +912,9 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
   if (!sets.length) {
     col.append(el('div', { class: 'side-empty' }, 'no sets yet'));
   } else {
-    let n = 0;
-    for (const x of sets) {
-      if (!x.warmup) n++;
-      const fresh = freshAttrs(x);
-      col.append(el('div', { class: 'side-set' + fresh.cls, style: fresh.style || null },
-        el('span', { class: 'n' }, x.warmup ? 'W' : String(n)),
-        el('span', { class: 'load' }, formatSetLoad(x)),
-        el('span', { class: 'muted' }, '\u00d7' + (x.metric === 'time'
-          ? formatDuration(x.seconds)
-          : x.reps + (x.halfReps ? `+${x.halfReps}h` : ''))),
-        (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null
-      ));
-    }
+    // Edit right where you just logged it: a missed Failure tag or wrong unit
+    // is usually caught here, seconds later. Returns to this screen after.
+    appendSets(col, sets, (x, n) => columnSetRow(x, n, { onEdit: () => go('edit/' + x.id) }));
   }
 
   col.append(el('button', { class: 'side-add', onClick: () => go(`set/${exerciseId}/${profile.id}`) },
@@ -764,15 +925,8 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
   const lt = lastSessionFor(state.recent, { exerciseId, profileId: profile.id, excludeDate: date });
   if (lt) {
     const box = el('div', { class: 'side-last' },
-      el('div', { class: 'side-last-when' }, 'last · ' + dayLabel(lt.date)));
-    for (const x of lt.sets) {
-      box.append(el('div', { class: 'side-last-set' },
-        el('span', { class: 'load' }, formatSetLoad(x)),
-        el('span', { class: 'muted' }, '×' + (x.metric === 'time'
-          ? formatDuration(x.seconds)
-          : x.reps + (x.halfReps ? `+${x.halfReps}h` : '')))
-      ));
-    }
+      el('div', { class: 'side-last-when' }, 'last \u00b7 ' + dayLabel(lt.date)));
+    appendSets(box, lt.sets, (x, n) => columnSetRow(x, n, { rich: true }));
     col.append(box);
   } else {
     col.append(el('div', { class: 'side-last' },
@@ -801,6 +955,7 @@ function viewExercise(v, exerciseId) {
 
   v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
     el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
+    el('button', { class: 'btn sm', onClick: () => go('progress/' + ex.id) }, '📈 Progress'),
     el('button', { class: 'btn sm', onClick: () => go('exercises/' + ex.id) }, 'Edit')
   ));
   v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' \u2192 ')));
@@ -829,13 +984,189 @@ function viewExercise(v, exerciseId) {
   v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: () => go('log') }, 'Done'));
 }
 
+/* ============================ progress ============================ */
+
+let progressSel = null;   // { exercise, key, date } — the tapped point
+
+/** Settings → "Animate charts". On by default. */
+const chartAnimOn = () => { try { return localStorage.getItem('gn.chartAnim') !== '0'; } catch { return true; } };
+
+// The chart last animated. Tapping a point or a resize re-renders the chart, and
+// replaying the entrance on every tap would get old fast — so it plays only
+// when a chart first appears or its metric changes. Cleared on leaving, so
+// coming back plays it again.
+let animatedKey = null;
+let animatedAt = 0;
+const CHART_ANIM_MS = 2700;   // the 2.6s glide is the longest step; a rebuild inside it resumes
+
+/**
+ * Every set held for an exercise: the shared 90-day window for everyone, plus
+ * the active profile's full history, de-duplicated by id.
+ */
+function chartPool(exerciseId) {
+  const byId = new Map();
+  for (const s of [...state.recent, ...state.sets]) if (s.exerciseId === exerciseId) byId.set(s.id, s);
+  return [...byId.values()];
+}
+
+/**
+ * Same two people as the exercise columns: left is you, right is whoever is
+ * selected there. One line each on one plot, so they compare directly.
+ */
+function viewProgress(v, exerciseId) {
+  const ex = exerciseById(exerciseId);
+  if (!ex) return go('log');
+
+  const { mode, left, right } = layoutSides({
+    profiles: state.profiles, owner: state.owner, rightId: localStorage.getItem('gn.rightSide'),
+  });
+  if (mode === 'none') return go('settings');
+  const people = mode === 'single' ? [left] : [left, right];
+
+  const P = buildProgress({
+    exercise: ex,
+    people,
+    pool: chartPool(exerciseId),
+    metric: localStorage.getItem('gn.chartMetric'),
+  });
+  const { metric, metrics, series } = P;
+
+  // --- header ---
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
+    el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
+    // Back to wherever it was opened from: the exercise screen or the library.
+    el('button', { class: 'btn sm', onClick: () => (prevHash ? history.back() : go('ex/' + exerciseId)) }, 'Back')
+  ));
+  v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' → ')));
+
+  if (metrics.length > 1) {
+    v.append(el('div', { style: 'margin-bottom:12px' },
+      segmented(metrics.map((k) => ({ key: k, label: CHART_METRICS[k].label })), metric, (k) => {
+        localStorage.setItem('gn.chartMetric', k);
+        progressSel = null;
+        render();
+      })));
+  }
+
+  const card = el('div', { class: 'card chart-card' });
+  v.append(card);
+
+  // The tapped point, if it belongs to this exercise.
+  const sel = progressSel && progressSel.exercise === exerciseId ? progressSel : null;
+
+  // --- legend: shape + name in text colour; identity is never colour alone ---
+  // Tiles already name each person beside the same swatch, so only the chart
+  // needs a legend.
+  if (series.length > 1 && P.layout === 'chart') {
+    card.append(el('div', { class: 'legend' },
+      ...series.map((s) => el('span', { class: 'legend-item' },
+        el('span', { class: `swatch s-${s.key} ${s.marker}` }), s.name))));
+  }
+
+  if (P.layout === 'empty') {
+    card.append(el('div', { class: 'empty' }, 'No sets logged yet.'));
+  } else if (P.layout === 'tiles') {
+    // One session is a number, not a trend: a lone dot on an axis says nothing.
+    card.append(el('div', { class: 'tiles' }, ...series.map((s) => statTile(s))));
+    card.append(el('div', { class: 'tiny faint', style: 'margin-top:10px;text-align:center' },
+      'The chart appears after a second session.'));
+  } else {
+    const plot = el('div', { class: 'plot' });
+    card.append(plot);
+    // A rebuild during the entrance (a set syncing in, a quick tap) passes how
+    // far along it is, so the new elements resume mid-animation rather than
+    // snapping to the end or restarting.
+    const key = exerciseId + '|' + metric;
+    if (key !== animatedKey) { animatedKey = key; animatedAt = Date.now(); }
+    const elapsed = Date.now() - animatedAt;
+    const animate = chartAnimOn() && elapsed < CHART_ANIM_MS;
+    drawChart(plot, {
+      series, metric, selected: sel, animate, elapsed,
+      axisTitle: P.axisTitle,
+      integerAxis: P.integerAxis,
+      onSelect: (key, p) => {
+        progressSel = sel && sel.key === key && sel.date === p.date ? null : { exercise: exerciseId, key, date: p.date };
+        render();
+      },
+    });
+  }
+
+  // --- notes on what the numbers mean ---
+  if (P.notes.length) card.append(el('div', { class: 'chart-notes' }, P.notes.join(' · ')));
+
+  // --- the tapped day, exactly as logged ---
+  const hit = sel && series.find((s) => s.key === sel.key)?.points.find((p) => p.date === sel.date);
+  if (hit) {
+    const who = series.find((s) => s.key === sel.key).name;
+    const box = el('div', { class: 'card' },
+      el('div', { class: 'row spread', style: 'margin-bottom:6px' },
+        el('strong', {}, `${who} · ${dayLabel(hit.date)}`),
+        el('button', { class: 'btn sm', onClick: () => { progressSel = null; render(); } }, '✕')));
+    if (hit.suspect) {
+      // The detector flags both directions, so name the unit that was logged.
+      const logged = hit.top?.unit === 'lb' ? 'lb' : 'kg';
+      const other = logged === 'kg' ? 'lb' : 'kg';
+      box.append(el('div', { class: 'suspect-note' },
+        `These numbers fit ${other} far better than ${logged} — probably the wrong unit was tapped. Tap ✎ on a set to correct it.`));
+    }
+    appendSets(box, hit.sets, (x, k) => columnSetRow(x, k, { rich: true, onEdit: () => go('edit/' + x.id) }));
+    v.append(box);
+  }
+
+  // --- every value in a table, so nothing depends on tapping a dot ---
+  // Chart only: on tiles it would print converted values beneath a tile that
+  // shows the same set as logged, and the tiles already give every value.
+  if (P.layout === 'chart') v.append(progressTable(series, metric));
+}
+
+function statTile(s) {
+  const p = s.points[s.points.length - 1];
+  return el('div', { class: `tile-stat s-${s.key}` },
+    el('div', { class: 'tile-stat-who' }, el('span', { class: `swatch s-${s.key} ${s.marker}` }), s.name),
+    p
+      ? [el('div', { class: 'tile-stat-val' }, formatSetLoad(p.top) + ' ' + formatEffortCompact(p.top),
+           p.suspect ? el('span', { class: 'suspect-mark', title: 'unit looks wrong' }, ' ?') : null),
+         el('div', { class: 'tiny faint' }, dayLabel(p.date))]
+      : el('div', { class: 'tiny faint', style: 'margin-top:6px' }, 'No sets yet'));
+}
+
+function progressTable(series, metric) {
+  const dates = [...new Set(series.flatMap((s) => s.points.map((p) => p.date)))].sort().reverse();
+  const cell = (s, d) => {
+    const p = s.points.find((q) => q.date === d);
+    // right-aligned like the numbers: left-aligned, the dash butted up against
+    // the previous column's value and read as "34—"
+    if (!p) return el('td', { class: 'num faint' }, '—');
+    return el('td', { class: 'num' }, formatValue(p.value, metric),
+      p.hollow ? el('span', { class: 'faint' }, ' ○') : null,
+      p.suspect ? el('span', { class: 'suspect-mark', title: 'unit looks wrong' }, ' ?') : null);
+  };
+  return el('div', { class: 'card' },
+    el('table', { class: 'ptable' },
+      el('thead', {}, el('tr', {}, el('th', {}, 'Day'), ...series.map((s) => el('th', { class: 'num' }, s.name)))),
+      el('tbody', {}, ...dates.map((d) => el('tr', {},
+        el('td', {}, dayLabel(d)), ...series.map((s) => cell(s, d)))))));
+}
+
+// The chart is drawn to the measured width, so redraw when the width changes.
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (route()[0] === 'progress') render(); }, 150);
+});
+
 /* ============================ log a set ============================ */
 
 /** Thin wrapper over the tested pure lookup. */
 const lastTime = (exerciseId, excludeDate, profileId) =>
   lastSessionFor(state.recent, { exerciseId, profileId, excludeDate });
 
-function viewLogSet(v, exerciseId, profileId) {
+/**
+ * The set form. With `existing` it edits that set instead of adding one: same
+ * layout, prefilled, gold, and saving only the fields edits.js allows.
+ */
+function viewLogSet(v, exerciseId, profileId, existing = null) {
+  const editing = !!existing;
   const ex = exerciseById(exerciseId);
   // The target is explicit in the URL now, not read from a global selector.
   // That is what makes dropping the confirm in the two-sided view safe.
@@ -843,13 +1174,17 @@ function viewLogSet(v, exerciseId, profileId) {
   if (!ex || !p) return go('log');
 
   const today = S.todayKey();
-  const draft = S.blankSet(ex);
+  const draft = editing ? draftFromSet(existing) : S.blankSet(ex);
   const onBehalf = !!(state.owner && p.name !== state.owner);
-  const back = () => go('ex/' + exerciseId);
+  // An edit returns to wherever it was opened from (Log, History, a chart).
+  const back = editing
+    ? () => (prevHash ? history.back() : go('log'))
+    : () => go('ex/' + exerciseId);
 
   // Carry the last set's load forward — you almost always repeat or nudge it.
+  // Not when editing: the set already has its numbers.
   const todays = setsFor(p.id, exerciseId, today);
-  const prev = todays[todays.length - 1] || lastTime(exerciseId, today, p.id)?.sets?.slice(-1)[0];
+  const prev = editing ? null : todays[todays.length - 1] || lastTime(exerciseId, today, p.id)?.sets?.slice(-1)[0];
   if (prev) {
     draft.weight = prev.weight; draft.unit = prev.unit;
     draft.perSide = prev.perSide; draft.unilateral = prev.unilateral;
@@ -863,27 +1198,37 @@ function viewLogSet(v, exerciseId, profileId) {
   v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' → ')));
 
   // --- today's sets for this person ---
-  if (todays.length) {
+  if (todays.length && !editing) {
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'tiny faint', style: 'margin-bottom:4px' }, 'Today so far'));
-    let n = 0;
-    todays.forEach((s) => { if (!s.warmup) n++; card.append(setLine(s, n, {
+    appendSets(card, todays, (s, n) => setLine(s, n, {
       ownerName: p.name,
+      onEdit: () => go('edit/' + s.id),
       onDelete: async () => { if (await confirmSheet('Delete this set?')) { await S.deleteSet(s.id); toast('Deleted'); } }
-    })); });
+    }));
     v.append(card);
   }
 
   /* ---------------- the form ---------------- */
-  const form = el('div', { class: 'card' });
+  const form = el('div', { class: 'card' + (editing ? ' edit-form' : '') });
 
-  // Always name the target, in every flow. A label that appears only sometimes
-  // is a label nobody reads — and this is now the only thing carrying it.
-  form.append(el('div', { class: 'forwho' + (onBehalf ? ' other' : '') },
-    el('span', { class: 'tiny' }, 'Adding a set for'),
-    el('strong', {}, p.name),
-    onBehalf ? el('span', { class: 'tiny' }, `· not ${state.owner}`) : null
-  ));
+  if (editing) {
+    const at = setTime(existing);
+    form.append(el('div', { class: 'edit-banner' },
+      el('span', { class: 'edit-banner-icon' }, '✎'),
+      el('div', {},
+        el('strong', {}, `Editing ${p.name}'s set`),
+        el('div', { class: 'tiny' }, dayLabel(existing.date) + (at ? ' at ' + fmtTime(at) : ''),
+          existing.editedAt ? ` · last edited by ${existing.editedBy || 'someone'}` : ''))));
+  } else {
+    // Always name the target, in every flow. A label that appears only sometimes
+    // is a label nobody reads — and this is now the only thing carrying it.
+    form.append(el('div', { class: 'forwho' + (onBehalf ? ' other' : '') },
+      el('span', { class: 'tiny' }, 'Adding a set for'),
+      el('strong', {}, p.name),
+      onBehalf ? el('span', { class: 'tiny' }, `· not ${state.owner}`) : null
+    ));
+  }
 
   const timed = draft.metric === 'time';
   const loaded = !draft.bodyweight;   // bodyweight work has no weight to enter
@@ -905,17 +1250,24 @@ function viewLogSet(v, exerciseId, profileId) {
   const clock = timed ? el('div', { class: 'clock' }, formatDuration(draft.seconds)) : null;
   if (timed) effort.node.addEventListener('input', () => { clock.textContent = formatDuration(effort.get()); });
 
-  // Changing unit retunes the step and snaps the current value onto its grid,
-  // so switching kg -> lb cannot leave you on 17.5 lb.
-  const unitOpts = (ex.allowedUnits || ['block']).map((u) => ({ key: u, label: UNITS[u].label }));
+  // Changing unit retunes the step and, when adding, snaps the value onto the
+  // new grid so switching kg -> lb cannot leave you on 17.5 lb.
+  //
+  // Not when editing. The point of an edit is usually "the wrong unit was
+  // tapped": the number was right, the label was wrong. Snapping would quietly
+  // change it — a 12.5 kg mistake corrected to lb would become 15 lb.
+  const units = [...new Set([...(ex.allowedUnits || ['block']), draft.unit])]; // keep a since-removed unit
+  const unitOpts = units.map((u) => ({ key: u, label: UNITS[u]?.label || u }));
   const unitRow = el('div');
   const paintUnits = () => {
     clear(unitRow).append(segmented(unitOpts, draft.unit, (k) => {
       draft.unit = k;
       weight.setStep(stepFor(k));
-      const snapped = snapTo(weight.get(), k);
-      weight.set(snapped);
-      draft.weight = snapped;
+      if (!editing) {
+        const snapped = snapTo(weight.get(), k);
+        weight.set(snapped);
+        draft.weight = snapped;
+      }
       paintUnits();
     }));
   };
@@ -941,6 +1293,19 @@ function viewLogSet(v, exerciseId, profileId) {
      stays visible. */
   const halfInput  = el('input', { type: 'number', inputmode: 'numeric', value: draft.halfReps || '' });
   const commentBox = el('textarea', { placeholder: 'Form, struggle, spotter, banter…' });
+  commentBox.value = draft.comment || '';
+
+  // One tap per note instead of typing between sets. Built once and only
+  // re-lit afterwards: rebuilding on every tap would snap the sideways-scrolled
+  // row back to its start mid-use. A lit chip tapped again takes its note out.
+  const chipBtns = QUICK_NOTES.map((q) => [q, el('button', {
+    type: 'button', class: 'chip-q',
+    onClick: () => { commentBox.value = toggleNote(commentBox.value, q); lightChips(); },
+  }, q)]);
+  const lightChips = () => { for (const [q, b] of chipBtns) b.classList.toggle('on', hasNote(commentBox.value, q)); };
+  lightChips();
+  commentBox.addEventListener('input', lightChips);
+  const chipsRow = el('div', { class: 'chips', role: 'group', 'aria-label': 'Quick notes' }, ...chipBtns.map(([, b]) => b));
 
   const supportRow = el('div');
   const paintSupport = () => {
@@ -1005,34 +1370,80 @@ function viewLogSet(v, exerciseId, profileId) {
       toggle('Warm-up', 'warmup', 'excluded from PRs')
     ),
     field('Support', supportRow),
-    field('Comment', commentBox)
+    field('Comment', commentBox),
+    chipsRow
   );
   if (!timed && loaded) form.append(el('h3', {}, 'Drop set'), dropsWrap);
 
-  form.addEventListener('input',  () => { formDirty = true; });
-  form.addEventListener('change', () => { formDirty = true; });
+  // Steppers, unit buttons and toggles change the draft without firing 'input',
+  // so typing alone missed most of the form: a set arriving from the other
+  // phone mid-tap would rebuild the screen and reset it.
+  for (const ev of ['input', 'change', 'pointerdown', 'click']) {
+    form.addEventListener(ev, () => { formDirty = true; });
+  }
   v.append(form);
 
-  v.append(busyButton('Save set', 'Adding…', 'btn primary block', async () => {
+  // The numbers as they stand in the form — shared by adding and editing.
+  const formValues = () => {
     const w = loaded ? weight.get() : 0;
     const e = effort.get();
+    return {
+      w, e,
+      fields: {
+        ...draft,
+        weight: w,
+        reps: timed ? 0 : e,
+        seconds: timed ? e : 0,
+        halfReps: timed ? 0 : (parseInt(halfInput.value) || 0),
+        comment: commentBox.value.trim(),
+        drops: (timed || !loaded) ? [] : draft.drops.filter((d) => d.reps > 0),
+      },
+    };
+  };
+
+  if (editing) {
+    v.append(busyButton('Save changes', 'Saving…', 'btn gold block', async () => {
+      const { e, fields } = formValues();
+      if (e <= 0) return toast(timed ? 'Need a hold time' : 'Need at least one rep');
+
+      // editPatch keeps only the editable fields, so when the set was logged,
+      // who logged it and on which phone all survive untouched.
+      const patch = editPatch(fields, { by: state.owner || null, deviceId: currentDeviceId(), now: Date.now() });
+      if (!changedFields(existing, patch).length) {
+        toast('Nothing changed');
+        formDirty = false;
+        return back();
+      }
+      await S.saveSet(existing.id, patch);
+      toast('Set updated');
+      formDirty = false;
+      back();
+    }));
+    // Red and explicit: this screen changes a record, so leaving it must not
+    // read like a save.
+    v.append(el('button', { class: 'btn danger block', style: 'margin-top:8px', onClick: back },
+      'Cancel without saving'));
+    return;
+  }
+
+  v.append(busyButton('Save set', 'Adding…', 'btn primary block', async () => {
+    const { e, fields } = formValues();
     if (e <= 0) return toast(timed ? 'Need a hold time' : 'Need at least one rep');
 
     // No confirm here: the target came from the URL and is named at the top of
     // this form, so there is no silent global selection left to get wrong.
     await S.addSet({
-      ...draft,
+      ...fields,
       profileId: p.id,
       exerciseId: ex.id,
       date: today,
-      weight: w,
-      reps: timed ? 0 : e,
-      seconds: timed ? e : 0,
-      halfReps: timed ? 0 : (parseInt(halfInput.value) || 0),
-      comment: commentBox.value.trim(),
+      // enteredBy is only as honest as the device-owner setting — sets typed on
+      // one phone while it was configured as someone else record that someone
+      // else. deviceId is the physical fact underneath, so the two can be
+      // compared and a mislabelled batch spotted.
       enteredBy: state.owner || null,
+      deviceId: currentDeviceId(),
       loggedAt: Date.now(),   // client clock: correct offline, and instant
-      drops: (timed || !loaded) ? [] : draft.drops.filter((d) => d.reps > 0),
     });
     tracker?.logged();
     toast(`Set logged for ${p.name}`);
@@ -1041,6 +1452,26 @@ function viewLogSet(v, exerciseId, profileId) {
   }));
 
   v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: back }, 'Done'));
+}
+
+/**
+ * Edit an existing set. Looked up from what this phone already holds: the
+ * shared 90-day window, plus the active profile's full history.
+ */
+function viewEditSet(v, setId) {
+  const set = [...state.recent, ...state.sets].find((s) => s.id === setId);
+  if (!set) {
+    v.append(el('div', { class: 'empty' },
+      'That set isn\'t loaded on this phone.', el('br'),
+      el('span', { class: 'tiny' }, 'It may be older than 90 days, or was deleted.'), el('br'),
+      el('button', { class: 'btn', style: 'margin-top:14px', onClick: () => go('log') }, 'Back to Log')));
+    return;
+  }
+  if (!exerciseById(set.exerciseId)) {
+    v.append(el('div', { class: 'empty' }, 'The exercise for this set was deleted, so it can\'t be edited.'));
+    return;
+  }
+  viewLogSet(v, set.exerciseId, set.profileId, set);
 }
 
 /* ============================ history ============================ */
@@ -1102,8 +1533,7 @@ function viewHistory(v) {
     for (const grp of groupIntoExercises(sets)) {
       detail.append(el('div', { style: 'margin-top:10px' },
         el('div', { class: 'tiny muted' }, exerciseById(grp.exerciseId)?.name || '(deleted)')));
-      let n = 0;
-      grp.sets.forEach((s) => { if (!s.warmup) n++; detail.append(setLine(s, n, { ownerName: p.name, showTime: true })); });
+      appendSets(detail, grp.sets, (s, n) => setLine(s, n, { ownerName: p.name, showTime: true, onEdit: () => go('edit/' + s.id) }));
     }
     card.append(el('button', { class: 'btn sm', style: 'margin-top:8px', onClick: (e) => {
       const open = detail.style.display !== 'none';
@@ -1129,14 +1559,22 @@ function viewExercisePool(v) {
       return;
     }
     for (const ex of hits) {
-      list.append(el('button', { class: 'manage-row', onClick: () => go('exercises/' + ex.id) },
-        el('div', { class: 'grow' },
-          el('div', { class: 'name' }, ex.name),
-          el('div', { class: 'meta' },
-            (ex.muscles || []).join(' · ') +
-            '   ·   ' + (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/'))
+      // Two sibling buttons, not one row-button: a 📈 nested inside a button is
+      // invalid HTML, and its tap would fall through to Edit.
+      list.append(el('div', { class: 'manage-row' },
+        el('button', { class: 'manage-main', onClick: () => go('exercises/' + ex.id) },
+          el('div', { class: 'grow' },
+            el('div', { class: 'name' }, ex.name),
+            el('div', { class: 'meta' },
+              (ex.muscles || []).join(' · ') +
+              '   ·   ' + (ex.allowedUnits || []).map((u) => UNITS[u]?.label).join('/'))
+          ),
+          el('span', { class: 'edit-tag' }, 'Edit')
         ),
-        el('span', { class: 'edit-tag' }, 'Edit')
+        el('button', {
+          class: 'manage-chart', title: 'Progress', 'aria-label': `Progress for ${ex.name}`,
+          onClick: () => go('progress/' + ex.id),
+        }, '📈')
       ));
     }
   };

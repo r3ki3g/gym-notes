@@ -80,6 +80,7 @@ export function blankSet(exercise) {
     support: 'none',
     warmup: false,
     comment: '',
+    deviceId: null,  // filled at save time — which phone actually typed this
     drops: [],   // [{weight, unit, reps}] — "#8 for 7 THEN #5 for 8" is ONE set
   };
 }
