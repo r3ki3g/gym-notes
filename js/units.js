@@ -79,7 +79,7 @@ export function formatDuration(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-const isTimed = (set) => set?.metric === 'time';
+export const isTimed = (set) => set?.metric === 'time';
 
 /** Total reps including halves, which count as 0.5. */
 export function totalReps(set) {

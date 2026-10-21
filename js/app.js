@@ -3,6 +3,8 @@ import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
+import { allPRs, newPRs } from './pr.js';
+import { gymDays, grid, streaks, parseTarget } from './streak.js';
 import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
 import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
@@ -222,6 +224,7 @@ function render() {
     return v.append(el('div', { class: 'empty' }, 'Loading…'));
   }
   hideSplash();   // real content is on screen now
+  prMap();        // notices a set that just became a PR, wherever you are
 
   // Device identity is required before anything can be logged, so a set is
   // never written without knowing who typed it.
@@ -750,6 +753,35 @@ function viewSettings(v) {
   v.append(el('button', { class: 'btn sm', style: 'margin:-2px 0 10px', onClick: () => go('picks') },
     `Show my picks (${learned.toLocaleString('en-US')}) ›`));
 
+  // --- pro features --------------------------------------------------------
+  v.append(el('h3', {}, 'Pro features'));
+  v.append(toggleRow(
+    'PR celebration',
+    'A gold flash and a PR tag when a set beats your best: heavier, or more reps at a weight you have done',
+    prOn,
+    (on) => { try { localStorage.setItem('gn.prOn', on ? '1' : '0'); } catch {} }
+  ));
+  v.append(toggleRow(
+    'Streak calendar',
+    'Gym days on a grid at the top of History, with weekly streaks for both of you',
+    streakOn,
+    (on) => { try { localStorage.setItem('gn.streakOn', on ? '1' : '0'); } catch {} }
+  ));
+  const targetVal = el('span', { class: 'limit-val' }, `${weeklyTarget()} days`);
+  const nudgeTarget = (dir) => {
+    const next = parseTarget(weeklyTarget() + dir);
+    try { localStorage.setItem('gn.weeklyTarget', String(next)); } catch {}
+    targetVal.textContent = `${next} day${next === 1 ? '' : 's'}`;
+  };
+  v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2)' },
+    el('div', { class: 'grow' },
+      el('div', {}, 'Weekly target'),
+      el('div', { class: 'tiny faint', style: 'margin-top:2px' }, 'Gym days a week that keep a streak going')),
+    el('button', { class: 'btn sm', 'aria-label': 'Fewer days', onClick: () => nudgeTarget(-1) }, '−'),
+    targetVal,
+    el('button', { class: 'btn sm', 'aria-label': 'More days', onClick: () => nudgeTarget(1) }, '+')
+  ));
+
   // --- rest timer ----------------------------------------------------------
   v.append(el('h3', {}, 'Rest timer'));
   v.append(toggleRow(
@@ -882,6 +914,53 @@ function enteredOn(name) {
 /** Settings → "Show time between sets". On by default — turning it off is the opt-out. */
 const restOn = () => { try { return localStorage.getItem('gn.showRest') !== '0'; } catch { return true; } };
 
+/** Settings → Pro features. Both on by default; the weekly target defaults to 4 days. */
+const prOn     = () => { try { return localStorage.getItem('gn.prOn') !== '0'; } catch { return true; } };
+const streakOn = () => { try { return localStorage.getItem('gn.streakOn') !== '0'; } catch { return true; } };
+const weeklyTarget = () => { try { return parseTarget(localStorage.getItem('gn.weeklyTarget')); } catch { return parseTarget(null); } };
+
+/*
+ * PRs (js/pr.js): worked out from every set this phone holds, cached until the
+ * data changes. A set that becomes a PR within two minutes of being logged is
+ * celebrated: a gold flash on its row and a toast, for your sets and your
+ * partner's as they arrive. Older ones just carry the tag.
+ */
+const PR_FLASH_MS = 1600;
+const prs = { map: new Map(), recent: null, sets: null, flash: new Map() };
+
+function prMap() {
+  if (prs.recent === state.recent && prs.sets === state.sets) return prs.map;
+  const byId = new Map();
+  for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
+  const next = allPRs([...byId.values()]);
+  const fresh = newPRs(prs.map, next, byId, Date.now());
+  prs.map = next; prs.recent = state.recent; prs.sets = state.sets;
+  if (fresh.length && prOn()) celebrate(fresh.map((id) => byId.get(id)));
+  return next;
+}
+
+function celebrate(sets) {
+  const now = Date.now();
+  for (const x of sets) prs.flash.set(x.id, now);
+  if (document.hidden) return;   // the tag stays; a toast nobody sees is pointless
+  const x = sets[sets.length - 1];
+  const who = state.profiles.find((p) => p.id === x.profileId)?.name;
+  const forWhom = who && who !== state.owner ? ` for ${who}` : '';
+  toast(`New PR${forWhom}: ${formatSetLoad(x)} ${formatEffortCompact(x)} on ${exerciseById(x.exerciseId)?.name || 'this exercise'}`, 'trophy');
+}
+
+const isPR = (x) => prOn() && prMap().has(x.id);
+
+/** Class and timing for a row whose set just became a PR, so a re-render mid-flash carries on. */
+function prFlashAttrs(x) {
+  const at = prs.flash.get(x.id);
+  if (!at) return { cls: '', style: '' };
+  const age = Date.now() - at;
+  if (age > PR_FLASH_MS) { prs.flash.delete(x.id); return { cls: '', style: '' }; }
+  return { cls: ' pr-flash', style: `--prd:-${age}ms` };
+}
+const joinStyle = (...parts) => parts.filter(Boolean).join(';') || null;
+
 /** Settings → Rest timer. Both on by default; the limit defaults to 5:00. */
 const liveRestOn = () => { try { return localStorage.getItem('gn.liveRest') !== '0'; } catch { return true; } };
 const restBuzzOn = () => { try { return localStorage.getItem('gn.restBuzz') !== '0'; } catch { return true; } };
@@ -976,6 +1055,7 @@ function setLine(s, index, opts = {}) {
       el('span', { class: 'muted' }, (s.metric === 'time' ? 'for ' : 'for ') + formatEffort(s)),
       s.support !== 'none' ? el('span', { class: 'tiny ' + sup.cls }, sup.label) : null,
       s.warmup ? el('span', { class: 'pill warmup' }, 'warm-up') : null,
+      isPR(s) ? el('span', { class: 'tag tag-pr' }, 'PR') : null,
       byOther ? enteredOn(s.enteredBy) : null
     )
   );
@@ -998,7 +1078,8 @@ function setLine(s, index, opts = {}) {
     main.append(el('div', { class: 'set-at' }, `edited${s.editedBy ? ' by ' + s.editedBy : ''} · ${timeAgo(s.editedAt)}`));
   }
 
-  return el('div', { class: 'set-line' + fresh.cls, style: fresh.style || null },
+  const flash = prFlashAttrs(s);
+  return el('div', { class: 'set-line' + fresh.cls + flash.cls, style: joinStyle(fresh.style, flash.style) },
     el('span', { class: 'set-no' }, s.warmup ? 'W' : `${index}.`),
     main,
     opts.onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: opts.onEdit }, icon('pencil', { size: 15 })) : null,
@@ -1203,6 +1284,7 @@ const setsFor = (profileId, exerciseId, date) => state.recent
  */
 function setTags(x) {
   const tags = [];
+  if (isPR(x)) tags.push(el('span', { class: 'tag tag-pr' }, 'PR'));
   if (x.warmup) tags.push(el('span', { class: 'tag tag-warm' }, 'warm-up'));
   const sup = SUPPORT[x.support];
   if (sup && x.support !== 'none') {
@@ -1228,16 +1310,19 @@ function columnSetRow(x, n, { rich = false, onEdit = null } = {}) {
     idx,
     el('span', { class: 'load' }, formatSetLoad(x)),
     el('span', { class: 'muted' }, formatEffortCompact(x)),
+    // today's rows are compact: a small mark instead of the full tag row
+    !rich && isPR(x) ? el('span', { class: 'pr-mark' }, 'PR') : null,
     !rich && (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null,
     onEdit ? el('span', { class: 'grow' }) : null,
     onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: onEdit }, icon('pencil', { size: 13 })) : null
   );
 
+  const flash = prFlashAttrs(x);
   if (!rich) {
-    return el('div', { class: 'side-set' + (x.warmup ? ' is-warm' : '') + fresh.cls, style: fresh.style || null }, head);
+    return el('div', { class: 'side-set' + (x.warmup ? ' is-warm' : '') + fresh.cls + flash.cls, style: joinStyle(fresh.style, flash.style) }, head);
   }
 
-  const tile = el('div', { class: 'tile' + (x.warmup ? ' is-warm' : '') }, head);
+  const tile = el('div', { class: 'tile' + (x.warmup ? ' is-warm' : '') + flash.cls, style: joinStyle(flash.style) }, head);
 
   const tags = setTags(x);
   if (tags.length) tile.append(el('div', { class: 'tile-tags' }, ...tags));
@@ -1920,6 +2005,7 @@ function viewHistory(v) {
   const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
 
   v.append(el('h2', {}, `${p.name} · History`));
+  if (streakOn()) v.append(streakCard(p));
   if (!dates.length) return v.append(el('div', { class: 'empty' }, 'Nothing logged yet.'));
 
   for (const date of dates) {
@@ -1940,7 +2026,7 @@ function viewHistory(v) {
     const first = stamps[0] || null;
     const last  = stamps[stamps.length - 1] || null;
 
-    const card = el('div', { class: 'card' });
+    const card = el('div', { class: 'card', id: 'day-' + date });
     card.append(el('div', { class: 'row spread' },
       el('strong', {}, dayLabel(date) + (first ? ` at ${fmtTime(first)}` : '')),
       el('span', { class: 'tiny faint' }, `${working.length} sets`)
@@ -1975,6 +2061,69 @@ function viewHistory(v) {
 
     v.append(card);
   }
+}
+
+/**
+ * Settings → Pro features → Streak calendar. A GitHub-style grid per person:
+ * columns are weeks, rows Monday to Sunday, deeper colour on bigger days. The
+ * person whose History this is comes first, and their days open in the list
+ * below; the partner's are for comparison.
+ */
+function streakCard(p) {
+  const byId = new Map();
+  for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
+  const all = [...byId.values()];
+  const today = S.todayKey();
+  const target = weeklyTarget();
+  const people = [p, ...(chartPeople() || []).filter((o) => o && o.id !== p.id)].slice(0, 2);
+  const card = el('div', { class: 'card streak-card' });
+  const weeksTxt = (n) => `${n.toLocaleString('en-US')} week${n === 1 ? '' : 's'}`;
+  const MON = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short' });
+
+  people.forEach((who, i) => {
+    const days = gymDays(all, who.id);
+    const weeks = grid(days, { today });
+    const st = streaks(days, { today, target });
+    const series = i === 0 ? 'me' : 'them';
+
+    // a label where a month starts; the first column only if its month runs on,
+    // or its label would run into the next one ("Jul Aug")
+    const months = el('div', { class: 'streak-months' }, ...weeks.map((w, k) => {
+      const show = k === 0 ? weeks[1] && MON(weeks[1].start) === MON(w.start) : MON(w.start) !== MON(weeks[k - 1].start);
+      return el('span', {}, show ? MON(w.start) : '');
+    }));
+    const cells = el('div', { class: 'streak-grid' }, ...weeks.flatMap((w) => w.days.map((d) => {
+      const own = i === 0 && d.count;
+      const label = `${who.name}, ${dayLabel(d.date)}: ${d.count ? `${d.count.toLocaleString('en-US')} sets` : 'no sets'}`;
+      return el(own ? 'button' : 'span', {
+        class: `streak-cell s-${series} l${d.level}` + (d.future ? ' future' : '') + (d.date === today ? ' today' : ''),
+        title: label, 'aria-label': own ? label : null, type: own ? 'button' : null,
+        onClick: own ? () => openDay(d.date) : null,
+      });
+    })));
+
+    card.append(el('div', { class: 'streak-person' },
+      el('div', { class: 'streak-who' },
+        el('span', { class: `swatch dot s-${series}` }), el('strong', {}, who.name)),
+      el('div', { class: 'streak-body' },
+        el('div', { class: 'streak-days' }, ...['M', '', 'W', '', 'F', '', ''].map((t) => el('span', {}, t))),
+        el('div', {}, months, cells)),
+      el('div', { class: 'tiny muted streak-stats' },
+        `This week: ${st.thisWeek} of ${target} days · Streak: ${weeksTxt(st.current)} · Best: ${weeksTxt(st.best)}`)));
+  });
+  card.append(el('div', { class: 'tiny faint', style: 'margin-top:8px' },
+    `A week counts toward a streak with ${target} or more gym days. Change it in Settings.`));
+  return card;
+}
+
+/** From the streak grid: bring that day's card into view and open it. */
+function openDay(date) {
+  const card = document.getElementById('day-' + date);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const btn = [...card.querySelectorAll('button')].find((b) => b.textContent === 'Show sets');
+  if (btn) btn.click();
+  card.classList.remove('day-pulse'); void card.offsetWidth; card.classList.add('day-pulse');
 }
 
 /* ============================ exercise pool ============================ */

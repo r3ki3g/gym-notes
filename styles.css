@@ -565,6 +565,48 @@ body.is-editing{
 .side-set .tile-head{align-items:center}
 .tag-edited{color:var(--gold);border-color:var(--line-edited)}
 
+/* ---------- Pro features: PRs (js/pr.js) ---------- */
+.tag-pr{color:#2b1f02;background:var(--gold-fill);border-color:var(--gold-fill);font-weight:800}
+/* today's compact rows have no tag row: a small mark beside the reps */
+.pr-mark{
+  flex:none;font-size:.56rem;font-weight:800;letter-spacing:.05em;line-height:1;
+  padding:2px 3px;border-radius:3px;background:var(--gold-fill);color:#2b1f02;align-self:center;
+}
+/* the flash sits on its own layer: the rows' "new set" glow already owns
+   their animation property */
+.side-set.pr-flash,.tile.pr-flash,.set-line.pr-flash{position:relative}
+.pr-flash::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  animation:pr-flash 1600ms ease-out both;animation-delay:var(--prd, 0ms);
+}
+@keyframes pr-flash{
+  0%  {background:rgba(240,180,41,.55);box-shadow:inset 0 0 0 2px var(--gold-fill),0 0 18px rgba(240,180,41,.55)}
+  35% {background:rgba(240,180,41,.28);box-shadow:inset 0 0 0 2px var(--gold-fill),0 0 12px rgba(240,180,41,.35)}
+  100%{background:transparent;box-shadow:inset 0 0 0 0 transparent}
+}
+
+/* ---------- Pro features: streak calendar (js/streak.js) ---------- */
+.streak-person + .streak-person{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.streak-who{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:.88rem}
+.streak-body{display:flex;gap:5px}
+.streak-days{display:grid;grid-template-rows:repeat(7, 14px);gap:3px;margin-top:15px;font-size:.6rem;color:var(--faint);line-height:14px}
+.streak-months{display:grid;grid-template-columns:repeat(13, 14px);gap:3px;height:12px;margin-bottom:3px;font-size:.6rem;color:var(--faint);white-space:nowrap}
+.streak-grid{display:grid;grid-template-rows:repeat(7, 14px);grid-auto-flow:column;grid-auto-columns:14px;gap:3px}
+.streak-cell{display:block;width:14px;height:14px;border-radius:3px;background:var(--panel-2);border:1px solid var(--line);padding:0}
+button.streak-cell{cursor:pointer}
+.streak-cell.future{visibility:hidden}
+.streak-cell.today{outline:1px solid var(--dim);outline-offset:1px}
+.streak-cell.s-me.l1{background:color-mix(in srgb, var(--series-me) 35%, var(--panel));border-color:transparent}
+.streak-cell.s-me.l2{background:color-mix(in srgb, var(--series-me) 65%, var(--panel));border-color:transparent}
+.streak-cell.s-me.l3{background:var(--series-me);border-color:transparent}
+.streak-cell.s-them.l1{background:color-mix(in srgb, var(--series-them) 35%, var(--panel));border-color:transparent}
+.streak-cell.s-them.l2{background:color-mix(in srgb, var(--series-them) 65%, var(--panel));border-color:transparent}
+.streak-cell.s-them.l3{background:var(--series-them);border-color:transparent}
+.streak-stats{margin-top:7px}
+/* a day opened from the grid */
+.day-pulse{animation:day-pulse 1.4s ease-out}
+@keyframes day-pulse{from{box-shadow:0 0 0 2px var(--accent)}to{box-shadow:0 0 0 0 transparent}}
+
 /* time between consecutive sets: a quiet timeline gap, not a row of its own */
 .rest-gap{
   display:flex;align-items:center;gap:6px;
@@ -684,6 +726,7 @@ body.is-editing{
   .chart.animate .end-name{animation:none}
   .chart.animate .end-value{animation:none}
   .rest-live-time{animation:none}
+  .pr-flash::after,.day-pulse{animation:none}
 }
 
 /* the progress chart on the exercise screen */

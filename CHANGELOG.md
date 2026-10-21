@@ -11,6 +11,45 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.28.0] — 10/21/26
+
+### Added: Pro features (Settings → Pro features, both on by default)
+Spec: `docs/pro-features-spec.md`. No emojis anywhere.
+- **PR celebration.** A set that beats your best on that exercise gets a gold
+  flash on its row and a toast, for example "New PR: 110 kg ×8 on Leg press",
+  or "New PR for Chamuth: …" when your partner's set arrives live. It keeps a
+  gold PR tag in History, in last time, in the Progress day view, and as a
+  small mark on today's rows.
+  - **Weight PR:** heavier than ever.
+  - **Rep PR:** at a weight done before, more reps than ever at it or heavier.
+  - **Time PR:** the longest hold.
+  - Warm-ups, ties, the first day of an exercise, and likely wrong-unit sets
+    never count. Per-side and each-side sets are only compared like with like.
+  - Worked out from the data each time, never stored, so edits and deletes
+    stay right. Only sets logged in the last 2 minutes are celebrated; older
+    PRs just carry the tag.
+  - On the real data, 71 of 365 working sets (19.5%) are PRs today. That's
+    high because the history is 4 weeks old, and it will fall as bests climb.
+- **Streak calendar** at the top of History: a GitHub-style grid per person.
+  - 13 weeks across, Monday to Sunday down, in each person's chart colour,
+    deeper on bigger days.
+  - Underneath: "This week: 1 of 4 days · Streak: 0 weeks · Best: 1 week".
+  - A streak counts weeks that hit the **weekly target (4 days, adjustable
+    1–7)**. The week in progress never breaks a streak.
+  - Tap one of your days to jump to it in History and open it.
+- New Lucide icon: trophy, for the PR toast.
+
+Verified:
+- 20 PR tests and 15 streak tests pass.
+- Live with two headless phones and the Test profile (3 throwaway sets,
+  deleted, 0 left): the heavier set flashed gold, showed the PR mark on one
+  line, and toasted "New PR for Test: 110 kg ×8 on Leg press". A lighter set
+  after it got only the normal alert.
+- The streak card shows the real data correctly in both themes, and a tapped
+  day opens on screen.
+
+---
+
 ## [1.27.0] — 10/21/26
 
 ### Fixed: live updates and alerts were unreliable
