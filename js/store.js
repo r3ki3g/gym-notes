@@ -14,6 +14,7 @@ export const COL = {
   exercises: 'exercises',
   sets:      'sets',
   usage:     'usage',
+  voice:     'voiceLogs',
 };
 
 const rows = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -170,6 +171,22 @@ export async function reconnect() {
   await disableNetwork(db);
   await enableNetwork(db);
 }
+
+/* ---------- voice log ---------- */
+
+/**
+ * One document per thing voice heard: the transcript, the browser's other
+ * guesses, and how it was read. Saving the set adds what was actually saved,
+ * so mishearings ("ribs" for "reps") can be found and taught to the parser.
+ */
+export function addVoiceLog(data) {
+  // the id is made here, so saving the set can update the entry even while
+  // offline, before the server has seen it
+  const ref = doc(collection(db, COL.voice));
+  setDoc(ref, { ...data, createdAt: serverTimestamp() }).catch(() => {});
+  return ref.id;
+}
+export const updateVoiceLog = (id, patch) => updateDoc(doc(db, COL.voice, id), patch);
 
 /* ---------- usage ---------- */
 

@@ -598,6 +598,41 @@ body.is-editing{
 .chip-sug strong{font-size:.92rem;font-variant-numeric:tabular-nums}
 .chip-sug.on{border-color:var(--accent);background:var(--accent-wash)}
 
+/* ---------- Pro features: voice logging (js/voice.js, js/speech.js) ---------- */
+.voice{margin:-4px 0 14px}
+/* "+ add set" with the mic beside it, which opens the form already listening */
+.side-add-row{display:flex;gap:6px;margin-top:8px}
+.side-add-row .side-add{margin-top:0;flex:1;min-width:0}
+.side-mic{
+  flex:none;width:42px;min-height:40px;display:grid;place-items:center;
+  background:var(--panel-2);border:1px solid var(--line-accent);border-radius:8px;color:var(--accent);
+}
+.mic-btn{display:inline-flex;align-items:center;gap:8px;min-height:40px;color:var(--accent);border-color:var(--line-accent)}
+.mic-btn.listening{color:#2b1f02;background:var(--gold-fill);border-color:var(--gold-fill);animation:mic-pulse 1.2s ease-out infinite}
+@keyframes mic-pulse{0%{box-shadow:0 0 0 0 rgba(240,180,41,.55)}100%{box-shadow:0 0 0 12px rgba(240,180,41,0)}}
+.voice-heard{margin-top:7px;color:var(--dim);line-height:1.45}
+.voice-miss{color:var(--warn)}
+.voice-err{color:var(--bad)}
+
+/* a field voice just filled: a gold border sweeps round it once (a conic
+   gradient whose start angle turns, shown only in a 2px ring by the mask),
+   then a soft gold outline stays until the field is touched, or 4s */
+@property --vang{syntax:"<angle>";inherits:false;initial-value:0deg}
+.voice-fill{position:relative;border-radius:10px}
+.voice-fill::after{
+  content:"";position:absolute;inset:-3px;border-radius:12px;padding:2px;pointer-events:none;
+  background:conic-gradient(from var(--vang), transparent 0deg 200deg, var(--gold-fill) 290deg, #fff3c4 330deg, var(--gold-fill) 345deg, transparent 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
+  animation:voice-sweep 900ms linear both, voice-settle 1ms linear forwards;
+  animation-delay:var(--vd, 0ms), calc(var(--vd, 0ms) + 900ms);
+}
+@keyframes voice-sweep{from{--vang:0deg}to{--vang:360deg}}
+@keyframes voice-settle{to{background:color-mix(in srgb, var(--gold-fill) 60%, transparent)}}
+.voice-drop-in{animation:voice-drop-in 380ms cubic-bezier(.2,.8,.3,1) both;animation-delay:var(--vd, 0ms)}
+@keyframes voice-drop-in{from{opacity:0;transform:translateY(-8px)}}
+.voice-warn{border-color:var(--bad)}
+
 /* ---------- Pro features: streak calendar (js/streak.js) ---------- */
 .streak-person + .streak-person{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .streak-who{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:.88rem}
@@ -743,6 +778,8 @@ button.streak-cell{cursor:pointer}
   .chart.animate .end-value{animation:none}
   .rest-live-time{animation:none}
   .pr-flash::after,.day-pulse{animation:none}
+  .voice-fill::after{animation:none;background:color-mix(in srgb, var(--gold-fill) 60%, transparent)}
+  .mic-btn.listening,.voice-drop-in{animation:none}
 }
 
 /* the progress chart on the exercise screen */

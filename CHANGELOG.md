@@ -11,6 +11,76 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.32.0] — 10/21/26
+
+### Added
+- **A mic beside every "+ add set"** on the exercise screen. It opens the form
+  already listening: one tap instead of two.
+- **Voice log** (Firestore `voiceLogs`, one entry per thing voice heard), for
+  improving recognition once there's real use:
+  - what Google heard, plus up to 2 alternative guesses, and whether it ran on
+    the phone or in the cloud
+  - how the parser read it, including words it couldn't place
+  - once saved: what was actually saved, the set's ID, **what was corrected by
+    hand** (e.g. reps 12 → 10), and what voice missed
+  - It respects "Count this device in usage stats": test devices don't log.
+
+### Fixed
+- **"reps" heard as "ribs"** (reported from real use), and also "rips",
+  "raps" and "wraps", now count as reps.
+
+Verified end-to-end on the Test profile:
+- The mic beside "+ add set" opened the form listening.
+- "100 kg for 12 ribs then 80 for 10" filled 100 kg × 12 and the drop.
+- Correcting to 10 reps and saving wrote a log entry with the alternative guess
+  ("…12 rips…"), `corrected: { reps: [12, 10] }` and the set's ID.
+- The set, the log entry and the usage record were deleted afterwards; 0 left.
+- 48 parser tests pass.
+
+---
+
+## [1.31.0] — 10/21/26
+
+### Added: Voice logging (Settings → Pro features, on by default)
+Spec: `docs/voice-logging-spec.md`.
+- **"Say the set" on the add-set form.** Tap it and speak: "60 lbs for 10
+  reps then 30 lbs for 12 reps, add comment slow and heavy". The words appear
+  as you talk, then the form fills: weight, unit, reps, half reps, support,
+  warm-up, per side / each side, quick notes, the comment, and up to 3 drops.
+  **Save is still a tap**, so a misheard number is always seen first.
+  - **Drops** start at "then", "drop set", "drop to", "dropped" or "drop down
+    to". A drop with no unit uses the set's unit, and a drop heavier than the
+    set is marked red.
+  - **Comments are a command:** "add comment …", "comment …" or "note …".
+    Anything else it can't place shows as "Didn't catch: …" and isn't saved.
+  - **Numbers spoken or as digits:** "sixty two point five kilos", "pin 7 for
+    14", "60x10", "a minute 30" on timed holds.
+  - **A spoken set is a working set unless you say "warm up"**, even when the
+    smart suggestion had ticked Warm-up.
+- **Each filled field gets a gold border that sweeps round it once**, 80ms
+  apart in form order, then a soft gold outline until you touch the field, or
+  4s. Drop rows slide in. With reduce motion on, it's the outline only.
+- **Speech-to-text is Chrome's own**, with no server, account or cost. It runs
+  on the phone when the browser offers that for the language, which works
+  offline; otherwise it uses Google's free speech service, which needs
+  internet. The mic is hidden where it can't work (Firefox, Brave).
+- **Clear messages** for a blocked microphone, no speech heard, or no internet.
+- New: `js/voice.js` (the parser, 42 tests), `js/speech.js` (the browser
+  wrapper), and the Lucide mic icon.
+
+Verified in headless Chrome, with a stand-in recogniser since it has no
+microphone:
+- the full spec sentence filled the set, the drop and the comment
+- words stream in while listening
+- "Didn't catch: banana" for an unknown word
+- the blocked-mic message
+- no mic with the setting off, or on Brave
+- the sweep clears after 4s
+
+Only a real phone can test the microphone prompt and accuracy.
+
+---
+
 ## [1.30.1] — 10/21/26
 
 ### Fixed

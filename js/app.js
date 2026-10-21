@@ -5,6 +5,8 @@ import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
 import { allPRs, newPRs } from './pr.js';
 import { suggestNext } from './nextset.js';
+import { parseUtterance, setSummary, voiceDiff } from './voice.js';
+import { speechSupported, listenOnce, speechError } from './speech.js';
 import { gymDays, grid, streaks, parseTarget } from './streak.js';
 import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
 import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
@@ -789,6 +791,14 @@ function viewSettings(v) {
     (on) => { try { localStorage.setItem('gn.streakOn', on ? '1' : '0'); } catch {} }
   ));
   v.append(toggleRow(
+    'Voice logging',
+    speechSupported()
+      ? 'A mic on the add-set form: say "60 kg for 10 then 40 for 8, add comment slow". It fills the form; you check it and tap Save'
+      : 'Not available in this browser: voice needs Chrome or Edge',
+    voiceOn,
+    (on) => { try { localStorage.setItem('gn.voice', on ? '1' : '0'); } catch {} }
+  ));
+  v.append(toggleRow(
     'Smart next set',
     'Starts where you started last time, climbs back up, repeats after a hard set; reps show as a target. Off: copies your last set',
     smartOn,
@@ -984,6 +994,12 @@ function heldSets() {
   for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
   return [...byId.values()];
 }
+
+/** Set by the mic beside "+ add set": the form opens already listening. */
+let listenOnOpen = false;
+
+/** Settings → Pro features → Voice logging. On by default; the mic shows only where the browser can do it. */
+const voiceOn = () => { try { return localStorage.getItem('gn.voice') !== '0'; } catch { return true; } };
 
 /** Settings → Pro features → Smart next set. On by default. */
 const smartOn = () => { try { return localStorage.getItem('gn.smartNext') !== '0'; } catch { return true; } };
@@ -1396,8 +1412,13 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
   const live = liveRestOn() && restingAfter(state.recent, { profileId: profile.id, today: date, now: Date.now() });
   if (live && live.set.exerciseId === exerciseId) col.append(restLiveRow(live.since));
 
-  col.append(el('button', { class: 'side-add', onClick: () => go(`set/${exerciseId}/${profile.id}`) },
-    '+ add set'));
+  // Beside "+ add set", a mic that opens the form already listening.
+  col.append(el('div', { class: 'side-add-row' },
+    el('button', { class: 'side-add', onClick: () => go(`set/${exerciseId}/${profile.id}`) }, '+ add set'),
+    voiceOn() && speechSupported()
+      ? el('button', { class: 'side-mic', title: 'Say the set', 'aria-label': `Say ${profile.name}'s set`,
+          onClick: () => { listenOnOpen = true; go(`set/${exerciseId}/${profile.id}`); } }, icon('mic', { size: 18 }))
+      : null));
 
   // Inside the column rather than one shared block underneath: both people are
   // logged from this one phone, so both sides need their own previous numbers.
@@ -1726,6 +1747,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
 
   const today = S.todayKey();
   const draft = editing ? draftFromSet(existing) : S.blankSet(ex);
+  const voiceLogs = [];   // voice-log entries from this form, completed on save
   const onBehalf = !!(state.owner && p.name !== state.owner);
   // An edit returns to wherever it was opened from (Log, History, a chart).
   const back = editing
@@ -1788,6 +1810,45 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       el('strong', {}, p.name),
       onBehalf ? el('span', { class: 'tiny' }, `· not ${state.owner}`) : null
     ));
+
+    // Voice logging (js/speech.js listens, js/voice.js understands). It only
+    // fills the form; Save stays a tap, so a misheard number is always seen first.
+    if (voiceOn() && speechSupported()) {
+      const label = el('span', {}, 'Say the set');
+      const mic = el('button', { type: 'button', class: 'btn mic-btn', 'aria-label': 'Say the set' }, icon('mic', { size: 18 }), label);
+      const heard = el('div', { class: 'voice-heard tiny' },
+        el('span', { class: 'faint' }, 'e.g. "60 kg for 10 then 40 for 8, add comment slow and heavy"'));
+      let stop = null;
+      mic.addEventListener('click', () => {
+        if (stop) { stop(); return; }
+        formDirty = true;   // a set arriving from the other phone must not rebuild the form mid-sentence
+        mic.classList.add('listening'); label.textContent = 'Listening… tap to stop';
+        heard.replaceChildren(el('span', { class: 'faint' }, 'Listening…'));
+        stop = listenOnce({
+          onText: (t) => heard.replaceChildren(el('span', {}, `“${t}”`)),
+          onDone: (res) => {
+            stop = null; mic.classList.remove('listening'); label.textContent = 'Say the set';
+            if (res.error) return heard.replaceChildren(el('span', { class: 'voice-err' }, speechError(res.error)));
+            if (!res.text) return heard.replaceChildren(el('span', { class: 'faint' }, "Didn't hear anything: tap and try again"));
+            const parsed = applyVoice(res.text, res.local, heard);
+            // the voice log: what was heard and how it was read; saving adds what was kept
+            if (usageCounted()) {
+              try {
+                const id = S.addVoiceLog({
+                  text: res.text, alternatives: res.alternatives || [], local: !!res.local, lang: res.lang || null,
+                  parsed: { set: parsed.set, drops: parsed.drops, notes: parsed.notes, comment: parsed.comment, unparsed: parsed.unparsed, warnings: parsed.warnings },
+                  exerciseId: ex.id, exercise: ex.name, profileId: p.id, enteredBy: state.owner || null,
+                  deviceId: currentDeviceId(), version: VERSION, browser: usageBrowser || null, saved: null,
+                });
+                voiceLogs.push({ id, parsed });
+              } catch { /* the log is best-effort; it never blocks logging a set */ }
+            }
+          },
+        });
+      });
+      form.append(el('div', { class: 'voice' }, mic, heard));
+      if (listenOnOpen) { listenOnOpen = false; mic.click(); }
+    }
   }
 
   const timed = draft.metric === 'time';
@@ -1983,6 +2044,78 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   );
   if (!timed && loaded) form.append(el('h3', {}, 'Drop set'), dropsWrap);
 
+  /**
+   * Puts what was heard into the form, and sweeps a gold border round each
+   * field it filled, in the order of the form, so you can see what landed where.
+   */
+  function applyVoice(text, local, heard) {
+    formDirty = true;   // a set arriving from the other phone must not wipe this
+    const r = parseUtterance(text, { timed, bodyweight: !loaded, unit: draft.unit });
+    const lit = [];
+    const fieldOf = (n) => n.closest('label.field') || n;
+    const issues = [...r.warnings];
+
+    if (loaded && r.set.unit) {
+      if (units.includes(r.set.unit)) {
+        if (r.set.unit !== draft.unit) { draft.unit = r.set.unit; weight.setStep(stepFor(r.set.unit)); paintUnits(); }
+      } else issues.push(`${UNITS[r.set.unit]?.label || r.set.unit} isn't a unit for this exercise`);
+    }
+    if (loaded && r.set.weight != null) { draft.weight = r.set.weight; weight.set(r.set.weight); lit.push(fieldOf(weight.node), fieldOf(unitRow)); }
+    if (timed && r.set.seconds != null) {
+      draft.seconds = r.set.seconds; effort.set(r.set.seconds); if (clock) clock.textContent = formatDuration(r.set.seconds);
+      lit.push(fieldOf(effort.node));
+    }
+    if (!timed && r.set.reps != null) { draft.reps = r.set.reps; effort.set(r.set.reps); lit.push(fieldOf(effort.node)); }
+    if (!timed && r.set.halfReps) { halfInput.value = String(r.set.halfReps); lit.push(fieldOf(halfInput)); }
+    if (r.set.support) { draft.support = r.set.support; paintSupport(); lit.push(fieldOf(supportRow)); }
+    // toggles go through their own buttons, so per side and each side still confirm
+    const flip = (label, key) => {
+      const b = [...form.querySelectorAll('button')].find((x) => x.textContent === label);
+      if (b && !draft[key]) { b.click(); lit.push(b.parentElement); }
+    };
+    if (r.set.warmup) flip('Warm-up', 'warmup');
+    // A spoken set is a working set unless "warm up" was said: the smart
+    // suggestion may have ticked Warm-up for a warm-up you went past.
+    else if (draft.warmup && (r.set.weight != null || r.set.reps != null)) {
+      const b = [...form.querySelectorAll('button')].find((x) => x.textContent === 'Warm-up');
+      if (b) { b.click(); lit.push(b.parentElement); }
+    }
+    if (r.set.perSide) flip('kg/side', 'perSide');
+    if (r.set.unilateral) flip('Each side', 'unilateral');
+    let note = false;
+    for (const n of r.notes) if (!hasNote(commentBox.value, n)) { commentBox.value = toggleNote(commentBox.value, n); note = true; }
+    if (r.comment && !hasNote(commentBox.value, r.comment)) { commentBox.value = toggleNote(commentBox.value, r.comment); note = true; }
+    if (note) { lightChips(); lit.push(fieldOf(commentBox)); }
+    if (r.drops.length && !timed && loaded) {
+      draft.drops = r.drops.map(({ weight: w, unit: u, reps, halfReps }) => ({ weight: w, unit: units.includes(u) ? u : draft.unit, reps, halfReps }));
+      paintDrops();
+      [...dropsWrap.querySelectorAll('.card')].forEach((c, i) => {
+        c.classList.add('voice-drop-in');
+        if (r.drops[i]?.heavier) c.classList.add('voice-warn');
+        lit.push(c);
+      });
+    }
+
+    // the sweep, staggered 80ms in form order
+    lit.forEach((n, i) => {
+      n.classList.remove('voice-fill'); void n.offsetWidth;
+      n.style.setProperty('--vd', `${i * 80}ms`);
+      n.classList.add('voice-fill');
+      const off = () => n.classList.remove('voice-fill');
+      n.addEventListener('input', off, { once: true });
+      n.addEventListener('pointerdown', off, { once: true });
+      setTimeout(off, 4000 + i * 80);
+    });
+
+    heard.replaceChildren(...[
+      el('div', {}, el('span', { class: 'faint' }, 'Heard: '), `“${text}”`, local ? el('span', { class: 'faint' }, ' · on this phone') : null),
+      r.unparsed.length ? el('div', { class: 'voice-miss' }, `Didn't catch: ${r.unparsed.join(' ')}`) : null,
+      ...issues.map((m) => el('div', { class: 'voice-err' }, m)),
+      lit.length ? null : el('div', { class: 'voice-err' }, 'Nothing to fill in: try "60 kg for 10 reps"'),
+    ].filter(Boolean));
+    return r;
+  }
+
   // Steppers, unit buttons and toggles change the draft without firing 'input',
   // so typing alone missed most of the form: a set arriving from the other
   // phone mid-tap would rebuild the screen and reset it.
@@ -2040,7 +2173,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
 
     // No confirm here: the target came from the URL and is named at the top of
     // this form, so there is no silent global selection left to get wrong.
-    await S.addSet({
+    const setId = await S.addSet({
       ...fields,
       profileId: p.id,
       exerciseId: ex.id,
@@ -2053,6 +2186,13 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       deviceId: currentDeviceId(),
       loggedAt: Date.now(),   // client clock: correct offline, and instant
     });
+    // complete the voice log: what was kept, and what was corrected by hand
+    if (voiceLogs.length) {
+      const saved = setSummary(fields);
+      for (const vl of voiceLogs) {
+        S.updateVoiceLog(vl.id, { setId, saved, ...voiceDiff(vl.parsed, saved), savedAt: Date.now() }).catch(() => {});
+      }
+    }
     tracker?.logged();
     toast(`Set logged for ${p.name}`);
     formDirty = false;
