@@ -3,6 +3,7 @@ import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
+import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
 import { CHART_METRICS, buildProgress } from './progress.js';
 import { draftFromSet, editPatch, changedFields } from './edits.js';
@@ -12,6 +13,7 @@ import { QUICK_NOTES, hasNote, toggleNote } from './notes.js';
 import { drawChart, formatValue } from './chart.js';
 import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatEffortCompact, formatDuration, setVolumeKg,
          SUPPORT, METRICS, TIME_STEP, stepFor, snapTo } from './units.js';
+import { icon } from './icons.js';
 import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel, timeAgo, stampMs, busyButton, stepper, fmtTime, fmtSpan } from './ui.js';
 import { VERSION } from './version.js';
 import { parseBrowser, createTracker, sessionId, deviceId, deviceHints, friendlyModel, FLUSH_MS } from './usage.js';
@@ -138,7 +140,7 @@ function paintTopbar() {
 
   const tab = route()[0];
   for (const b of document.querySelectorAll('#tabs button')) {
-    b.classList.toggle('active', b.dataset.route === tab);
+    b.classList.toggle('active', b.dataset.route === (tab === 'picks' ? 'settings' : tab));
     b.onclick = () => go(b.dataset.route);
 
     if (b.dataset.route === 'alerts') {
@@ -182,6 +184,8 @@ function hideSplash() {
   splashDone = true;
   clearTimeout(splashFailsafe);
   document.getElementById('splash')?.classList.add('gone');
+  // The splash is always dark; the browser bar follows the app's theme from here.
+  if (themeName() === 'light') document.querySelector('meta[name=theme-color]')?.setAttribute('content', '#f4f1f8');
 }
 
 // Bad signal in the gym means a first-ever load can hang on auth. Never leave
@@ -216,6 +220,7 @@ function render() {
     case 'settings':
     case 'profiles':  return viewSettings(v);
     case 'search':    return viewSearch(v);
+    case 'picks':     return viewPicks(v);
     case 'set':       return viewLogSet(v, arg, arg2);
     case 'edit':      return viewEditSet(v, arg);
     case 'history':   return viewHistory(v);
@@ -268,13 +273,13 @@ function startRecentWatch() {
       let msg;
       if (theirs.length === 1) {
         const ex = exerciseById(theirs[0].exerciseId);
-        msg = `💪 ${who[0]} logged ${ex ? ex.name : 'a set'}`;
+        msg = `${who[0]} logged ${ex ? ex.name : 'a set'}`;
       } else if (who.length === 1) {
-        msg = `💪 ${who[0]} logged ${theirs.length} sets`;
+        msg = `${who[0]} logged ${theirs.length} sets`;
       } else {
-        msg = `💪 ${theirs.length} new sets logged`;
+        msg = `${theirs.length} new sets logged`;
       }
-      toast(msg);
+      toast(msg, 'dumbbell');
       chime();        // self-limiting: at most one tone per 15s
     }
     renderFromData();
@@ -439,7 +444,7 @@ function viewAlerts(v) {
     const forWhom = state.profiles.find((p) => p.id === x.profileId);
 
     card.append(el('div', { class: 'feed-item' + (ms && ms > cutoff ? ' fresh' : '') },
-      el('div', { class: 'feed-icon' }, '💪'),
+      el('div', { class: 'feed-icon' }, icon('dumbbell', { size: 17 })),
       el('div', { class: 'grow' },
         el('div', {},
           el('strong', {}, x.enteredBy),
@@ -468,7 +473,7 @@ function viewAlerts(v) {
  */
 function viewWhoAmI(v) {
   v.append(el('div', { style: 'text-align:center;margin:6vh 0 18px' },
-    el('div', { style: 'font-size:2.4rem' }, '👋'),
+    el('div', { class: 'hero-icon' }, icon('hand', { size: 40 })),
     el('h2', { style: 'margin:12px 0 4px' }, 'Who is using this phone?'),
     el('p', { class: 'muted tiny' }, 'Asked once. It labels every set you enter for someone else.')
   ));
@@ -490,7 +495,21 @@ function viewWhoAmI(v) {
   }));
 }
 
+// Tab bar icons: index.html names them (data-icon), the modules draw them.
+for (const n of document.querySelectorAll('[data-icon]')) n.replaceChildren(icon(n.dataset.icon, { size: 22 }));
+
 /* ============================ settings ============================ */
+
+/** Settings → Appearance. Dark unless light was picked. index.html applies it before first paint. */
+const themeName = () => { try { return localStorage.getItem('gn.theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; } };
+
+function applyTheme(t) {
+  try { t === 'light' ? localStorage.setItem('gn.theme', 'light') : localStorage.removeItem('gn.theme'); } catch {}
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  // the browser's own bar (Android) follows the page
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t === 'light' ? '#f4f1f8' : '#08060d');
+}
 
 /** Reusable on/off row so every toggle reads and behaves identically. */
 function toggleRow(label, hint, isOn, onToggle) {
@@ -540,7 +559,7 @@ function viewSettings(v) {
           await S.deleteProfile(p.id);
           if (state.profileId === p.id) setProfile(null);
           toast('Deleted');
-        } }, '✕')
+        }, 'aria-label': `Delete ${p.name}` }, icon('x', { size: 16 }))
       )
     ));
   }
@@ -576,6 +595,17 @@ function viewSettings(v) {
     }
   ));
 
+  // --- appearance ----------------------------------------------------------
+  v.append(el('h3', {}, 'Appearance'));
+  v.append(el('div', { class: 'card', style: 'background:var(--panel-2)' },
+    el('div', { style: 'margin-bottom:8px' }, 'Theme'),
+    segmented([{ key: 'dark', label: 'Dark' }, { key: 'light', label: 'Light (new)' }], themeName(), (t) => {
+      applyTheme(t);
+      render();
+    }),
+    el('div', { class: 'tiny faint', style: 'margin-top:8px' },
+      'Light is new: if something is hard to read, say so')));
+
   // --- display -------------------------------------------------------------
   v.append(el('h3', {}, 'Display'));
   v.append(toggleRow(
@@ -592,17 +622,29 @@ function viewSettings(v) {
     (on) => { try { localStorage.setItem('gn.inlineChart', on ? '1' : '0'); } catch {} }
   ));
   v.append(toggleRow(
-    'Most-done exercises first in search',
-    'Ranks by how many days you two did each one in the last 2 weeks. Off: A–Z. Name matches still come first either way',
-    searchFreqOn,
-    (on) => { try { localStorage.setItem('gn.searchFreq', on ? '1' : '0'); } catch {} }
-  ));
-  v.append(toggleRow(
     'Animate charts',
     'Lines draw in and dots drop into place when a chart opens',
     chartAnimOn,
     (on) => { try { localStorage.setItem('gn.chartAnim', on ? '1' : '0'); } catch {} }
   ));
+
+  // --- search --------------------------------------------------------------
+  v.append(el('h3', {}, 'Search'));
+  v.append(toggleRow(
+    'Most-done exercises first',
+    'Ranks by how many days you two did each one in the last 2 weeks. Off: A–Z. Name matches still come first either way',
+    searchFreqOn,
+    (on) => { try { localStorage.setItem('gn.searchFreq', on ? '1' : '0'); } catch {} }
+  ));
+  v.append(toggleRow(
+    'Put my usual pick first',
+    'Type, tap a result, and next time the same words put it at the top, marked "your pick". Kept on this phone only',
+    learnOn,
+    (on) => { try { localStorage.setItem('gn.learnPicks', on ? '1' : '0'); } catch {} }
+  ));
+  const learned = phraseCount(loadPicks(), Date.now());
+  v.append(el('button', { class: 'btn sm', style: 'margin:-2px 0 10px', onClick: () => go('picks') },
+    `Show my picks (${learned.toLocaleString('en-US')}) ›`));
 
   // --- rest timer ----------------------------------------------------------
   v.append(el('h3', {}, 'Rest timer'));
@@ -716,7 +758,7 @@ function groupIntoExercises(sets) {
  *
  * A phone because that is literally what the field records — whose phone the
  * set was logged from. A person glyph would read as whose set it is, and a pen
- * would collide with the ✎ edit button. Drawn as SVG rather than 📱 because
+ * would collide with the pencil edit button. Drawn as SVG rather than an emoji because
  * Android renders emoji in full colour, which defeats "mild".
  */
 function enteredOn(name) {
@@ -750,12 +792,19 @@ function restLiveRow(since) {
   return row;
 }
 
+// The current theme's grey, gold and red, read from the stylesheet so the
+// timer always uses colours that were contrast-checked against its background.
+const heatStops = () => {
+  const cs = getComputedStyle(document.documentElement);
+  return ['--faint', '--gold', '--bad'].map((v) => cs.getPropertyValue(v).trim());
+};
+
 function paintRestLive(row, now) {
   const elapsed = Math.max(0, now - Number(row.dataset.since));
   if (elapsed > LIVE_MAX_MS) { row.remove(); return; }
   const limit = restLimit();
   row.lastChild.textContent = formatRest(elapsed);
-  row.style.setProperty('--heat', heatColor(restHeat(elapsed, limit)));
+  row.style.setProperty('--heat', heatColor(restHeat(elapsed, limit), heatStops()));
   row.classList.toggle('over', elapsed >= limit * 1000);
 }
 
@@ -804,7 +853,7 @@ function appendSets(container, sets, makeRow) {
         class: 'rest-gap',
         title: 'Time since the previous set — includes the set itself, since only the end of a set is recorded',
       // "Rest:" — a bare "4:07" read as a time of day, not a duration.
-      }, el('span', { class: 'rest-gap-icon' }, '⏱'), 'Rest: ' + formatRest(gaps[i])));
+      }, icon('timer', { size: 12, cls: 'rest-gap-icon' }), 'Rest: ' + formatRest(gaps[i])));
     }
     if (!x.warmup) n++;
     container.append(makeRow(x, n));
@@ -848,8 +897,8 @@ function setLine(s, index, opts = {}) {
   return el('div', { class: 'set-line' + fresh.cls, style: fresh.style || null },
     el('span', { class: 'set-no' }, s.warmup ? 'W' : `${index}.`),
     main,
-    opts.onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: opts.onEdit }, '✎') : null,
-    opts.onDelete ? el('button', { class: 'btn sm danger', onClick: opts.onDelete }, '✕') : null
+    opts.onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: opts.onEdit }, icon('pencil', { size: 15 })) : null,
+    opts.onDelete ? el('button', { class: 'btn sm danger', 'aria-label': 'Delete set', onClick: opts.onDelete }, icon('x', { size: 16 })) : null
   );
 }
 
@@ -905,7 +954,7 @@ function viewLog(v) {
 
 /* ============================ exercise search ============================ */
 
-/** Settings → "Most-done exercises first in search". On by default. */
+/** Settings → Search → "Most-done exercises first". On by default. */
 const searchFreqOn = () => { try { return localStorage.getItem('gn.searchFreq') !== '0'; } catch { return true; } };
 
 // Days each exercise was trained in the last 2 weeks, both of you together —
@@ -913,21 +962,89 @@ const searchFreqOn = () => { try { return localStorage.getItem('gn.searchFreq') 
 // name matches still come first, then muscle priority, then A-Z.
 const recentUse = () => searchFreqOn() ? recentFrequency(state.recent, { today: S.todayKey(), days: 14 }) : null;
 
+/** Settings → Search → "Put my usual pick first". On by default. Kept on this phone only. */
+const learnOn = () => { try { return localStorage.getItem('gn.learnPicks') !== '0'; } catch { return true; } };
+const loadPicks = () => { try { return parseStore(localStorage.getItem('gn.searchPicks')); } catch { return parseStore(null); } };
+
+/** The exercise this phone's owner usually taps for what is typed, or null. */
+const usualPick = (query) => (learnOn() ? learnedPick(loadPicks(), query, Date.now()) : null);
+
+/** Remember a tap in the search results, under what was typed. */
+function rememberPick(query, exerciseId) {
+  if (!learnOn() || !query.trim()) return;
+  try { localStorage.setItem('gn.searchPicks', JSON.stringify(recordPick(loadPicks(), query, exerciseId, Date.now()))); } catch {}
+}
+
+const savePicks = (store) => { try { localStorage.setItem('gn.searchPicks', JSON.stringify(store)); } catch {} };
+
+/**
+ * Settings → Search → Show my picks: what was typed, what was tapped, and a
+ * delete on each phrase. The top exercise under a phrase is the one search
+ * puts first for it.
+ */
+function viewPicks(v) {
+  const list = listPicks(loadPicks(), Date.now());
+
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:4px' },
+    // whose they are: each phone learns its own owner's habits
+    el('h2', { class: 'grow', style: 'margin:0' }, state.owner ? `${state.owner}'s usual picks` : 'Usual picks on this phone'),
+    el('button', { class: 'btn sm', onClick: () => (prevHash ? history.back() : go('settings')) }, 'Back')));
+  v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:14px' },
+    'What you typed in search, and what you tapped. The top one comes first when you type those words. Kept on this phone only.'));
+
+  if (!list.length) {
+    v.append(el('div', { class: 'card empty' },
+      learnOn() ? 'Nothing yet. Type in search and tap an exercise, and it shows up here.'
+                : 'Nothing yet, and "Put my usual pick first" is off.'));
+    return;
+  }
+
+  const name = (id) => exerciseById(id)?.name || 'Deleted exercise';
+  const times = (n) => `${n.toLocaleString('en-US')} pick${n === 1 ? '' : 's'}`;
+
+  v.append(el('div', { class: 'manage-list' }, ...list.map(({ phrase, picks, at }) => {
+    const [top, ...rest] = picks;
+    return el('div', { class: 'pick-row' },
+      el('div', { class: 'grow' },
+        el('div', { class: 'pick-phrase' }, `“${phrase}”`),
+        el('div', { class: 'pick-main' }, '→ ' + name(top.id)),
+        el('div', { class: 'meta' }, `${times(top.n)} · last ${timeAgo(at)}`),
+        rest.length ? el('div', { class: 'pick-also' },
+          'also ' + rest.map((r) => `${name(r.id)} (${r.n.toLocaleString('en-US')})`).join(', ')) : null),
+      el('button', { class: 'btn sm danger', 'aria-label': `Delete “${phrase}”`, onClick: () => {
+        savePicks(forgetPhrase(loadPicks(), phrase));
+        toast(`Deleted “${phrase}”`);
+        render();
+      } }, 'Delete'));
+  })));
+
+  v.append(el('button', { class: 'btn block danger', style: 'margin-top:16px', onClick: async () => {
+    if (!(await confirmSheet('Delete all your picks?',
+      `${list.length.toLocaleString('en-US')} on this phone. Search goes back to its normal order.`, 'Delete all'))) return;
+    try { localStorage.removeItem('gn.searchPicks'); } catch {}
+    toast('All picks deleted');
+    render();
+  } }, 'Delete all'));
+}
+
 function viewSearch(v) {
   const input = el('input', { placeholder: 'Search — try "tricep" or "incline db"', autocomplete: 'off' });
   const results = el('div');
 
   const paint = () => {
     clear(results);
-    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse() });
+    const pinned = usualPick(input.value);
+    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse(), pinned });
     if (!hits.length) {
       results.append(el('div', { class: 'empty' }, 'No match.'));
     }
     for (const ex of hits.slice(0, 40)) {
-      results.append(el('button', { class: 'result', onClick: () => go('ex/' + ex.id) },
+      results.append(el('button', { class: 'result', onClick: () => { rememberPick(input.value, ex.id); go('ex/' + ex.id); } },
         el('div', { class: 'grow' },
           el('div', { class: 'name' }, ex.name),
           el('div', { class: 'row wrap', style: 'gap:4px;margin-top:4px' },
+            // says why it jumped the queue
+            ex.id === pinned ? el('span', { class: 'pill learned-pill' }, icon('rotate-ccw', { size: 11 }), 'your pick') : null,
             ...(ex.muscles || []).slice(0, 3).map((m, i) =>
               el('span', { class: 'pill' + (i === 0 ? ' primary-muscle' : '') }, m))
           )
@@ -1009,7 +1126,7 @@ function columnSetRow(x, n, { rich = false, onEdit = null } = {}) {
     el('span', { class: 'muted' }, formatEffortCompact(x)),
     !rich && (x.drops || []).length ? el('span', { class: 'tiny drop' }, '\u2193') : null,
     onEdit ? el('span', { class: 'grow' }) : null,
-    onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: onEdit }, '✎') : null
+    onEdit ? el('button', { class: 'btn sm edit-btn', 'aria-label': 'Edit set', onClick: onEdit }, icon('pencil', { size: 13 })) : null
   );
 
   if (!rich) {
@@ -1091,7 +1208,7 @@ function viewExercise(v, exerciseId) {
 
   v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
     el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
-    el('button', { class: 'btn sm', onClick: () => go('progress/' + ex.id) }, '📈 Progress'),
+    el('button', { class: 'btn sm with-icon', onClick: () => go('progress/' + ex.id) }, icon('chart-line', { size: 16 }), 'Progress'),
     el('button', { class: 'btn sm', onClick: () => go('exercises/' + ex.id) }, 'Edit')
   ));
   v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' \u2192 ')));
@@ -1122,7 +1239,7 @@ function viewExercise(v, exerciseId) {
   ));
 
   // The chart right here, so progress is visible the moment an exercise is
-  // picked. The 📈 button above still opens the full page with its table.
+  // picked. The Progress button above still opens the full page with its table.
   if (inlineChartOn()) {
     const people = mode === 'single' ? [left] : [left, right];
     v.append(el('div', { class: 'row spread inline-chart-head' },
@@ -1197,7 +1314,7 @@ function appendProgressChart(v, ex, people, { inline = false } = {}) {
   if (inline && P.layout !== 'chart') {
     if (P.layout === 'tiles') {
       v.append(el('div', { class: 'tiny faint inline-chart-hint' },
-        '📈 A progress chart appears here after a second session.'));
+        icon('chart-line', { size: 14 }), ' A progress chart appears here after a second session.'));
     }
     return P;
   }
@@ -1291,13 +1408,13 @@ function viewProgress(v, exerciseId) {
     const box = el('div', { class: 'card' },
       el('div', { class: 'row spread', style: 'margin-bottom:6px' },
         el('strong', {}, `${who} · ${dayLabel(hit.date)}`),
-        el('button', { class: 'btn sm', onClick: () => { progressSel = null; render(); } }, '✕')));
+        el('button', { class: 'btn sm', 'aria-label': 'Close', onClick: () => { progressSel = null; render(); } }, icon('x', { size: 16 }))));
     if (hit.suspect) {
       // The detector flags both directions, so name the unit that was logged.
       const logged = hit.top?.unit === 'lb' ? 'lb' : 'kg';
       const other = logged === 'kg' ? 'lb' : 'kg';
       box.append(el('div', { class: 'suspect-note' },
-        `These numbers fit ${other} far better than ${logged} — probably the wrong unit was tapped. Tap ✎ on a set to correct it.`));
+        `These numbers fit ${other} far better than ${logged} — probably the wrong unit was tapped. Tap the pencil on a set to correct it.`));
     }
     appendSets(box, hit.sets, (x, k) => columnSetRow(x, k, { rich: true, onEdit: () => go('edit/' + x.id) }));
     v.append(box);
@@ -1405,7 +1522,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   if (editing) {
     const at = setTime(existing);
     form.append(el('div', { class: 'edit-banner' },
-      el('span', { class: 'edit-banner-icon' }, '✎'),
+      el('span', { class: 'edit-banner-icon' }, icon('pencil', { size: 22 })),
       el('div', {},
         el('strong', {}, `Editing ${p.name}'s set`),
         el('div', { class: 'tiny' }, dayLabel(existing.date) + (at ? ' at ' + fmtTime(at) : ''),
@@ -1505,9 +1622,17 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   };
   paintSupport();
 
-  const toggle = (labelText, key, hint) => {
-    const btn = el('button', { type: 'button', class: 'btn sm', onClick: () => {
-      draft[key] = !draft[key];
+  const toggle = (labelText, key, hint, guard = null) => {
+    const btn = el('button', { type: 'button', class: 'btn sm', onClick: async () => {
+      const next = !draft[key];
+      // Per side and each side are set on the exercise, and a wrong flip
+      // silently halves or doubles the set. Leaving the exercise's setting asks
+      // first; going back to it does not.
+      if (guard && next !== guard.base &&
+          !(await confirmSheet('Change from the exercise setting?',
+            guard.say(next) + ' To change it for every set, edit the exercise instead.',
+            'Change for this set', 'primary'))) return;
+      draft[key] = next;
       btn.classList.toggle('primary', draft[key]);
     } }, labelText);
     btn.classList.toggle('primary', draft[key]);
@@ -1522,7 +1647,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       dropsWrap.append(el('div', { class: 'card', style: 'background:var(--panel-2);margin-bottom:10px' },
         el('div', { class: 'row spread', style: 'margin-bottom:8px' },
           el('span', { class: 'tiny faint' }, `Drop ${i + 1}`),
-          el('button', { class: 'btn sm danger', onClick: () => { draft.drops.splice(i, 1); paintDrops(); } }, '✕')
+          el('button', { class: 'btn sm danger', 'aria-label': `Remove drop ${i + 1}`, onClick: () => { draft.drops.splice(i, 1); paintDrops(); } }, icon('x', { size: 16 }))
         ),
         el('div', { class: 'row' },
           el('div', { class: 'grow' }, field('Weight', stepper({
@@ -1555,8 +1680,18 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
 
   form.append(
     el('div', { class: 'row', style: 'margin-bottom:12px' },
-      loaded ? toggle('kg/side', 'perSide', 'weight per side') : null,
-      toggle('Each side', 'unilateral', timed ? 'held each side' : 'reps per side'),
+      loaded ? toggle('kg/side', 'perSide', 'weight per side', {
+        base: !!ex.perSideDefault,
+        say: (on) => on
+          ? `${ex.name} is set up for the total weight. Count it per side for this set?`
+          : `${ex.name} is set up for weight per side ("15 kg each side"). Count the total for this set?`,
+      }) : null,
+      toggle('Each side', 'unilateral', timed ? 'held each side' : 'reps per side', {
+        base: !!ex.unilateralDefault,
+        say: (on) => on
+          ? `${ex.name} is set up for ${timed ? 'one hold' : 'reps with both sides together'}. Count each side separately for this set?`
+          : `${ex.name} is set up for ${timed ? 'a hold on each side' : 'reps on each side'} ("12 reps each side"). Count both sides together for this set?`,
+      }),
       toggle('Warm-up', 'warmup', 'excluded from PRs')
     ),
     field('Support', supportRow),
@@ -1641,7 +1776,10 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
     back();
   }));
 
-  v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: back }, 'Done'));
+  // Red and explicit, like the edit screen: this only leaves, and a neutral
+  // "Done" read as a save — sets were lost thinking it had kept them.
+  v.append(el('button', { class: 'btn danger block', style: 'margin-top:8px', onClick: back },
+    'Cancel without saving'));
 }
 
 /**
@@ -1743,13 +1881,13 @@ function viewExercisePool(v) {
 
   const paint = () => {
     clear(list);
-    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse() });
+    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse(), pinned: usualPick(input.value) });
     if (!hits.length) {
       list.append(el('div', { class: 'empty tiny' }, 'No match.'));
       return;
     }
     for (const ex of hits) {
-      // Two sibling buttons, not one row-button: a 📈 nested inside a button is
+      // Two sibling buttons, not one row-button: a chart button nested inside a button is
       // invalid HTML, and its tap would fall through to Edit.
       list.append(el('div', { class: 'manage-row' },
         el('button', { class: 'manage-main', onClick: () => go('exercises/' + ex.id) },
@@ -1764,7 +1902,7 @@ function viewExercisePool(v) {
         el('button', {
           class: 'manage-chart', title: 'Progress', 'aria-label': `Progress for ${ex.name}`,
           onClick: () => go('progress/' + ex.id),
-        }, '📈')
+        }, icon('chart-line', { size: 20 }))
       ));
     }
   };
@@ -1820,7 +1958,7 @@ function viewExerciseEditor(v, id) {
         el('button', { class: 'btn sm', disabled: i === ex.muscles.length - 1, onClick: () => {
           [ex.muscles[i + 1], ex.muscles[i]] = [ex.muscles[i], ex.muscles[i + 1]]; paintMuscles();
         } }, '↓'),
-        el('button', { class: 'btn sm danger', onClick: () => { ex.muscles.splice(i, 1); paintMuscles(); } }, '✕')
+        el('button', { class: 'btn sm danger', 'aria-label': `Remove ${m}`, onClick: () => { ex.muscles.splice(i, 1); paintMuscles(); } }, icon('x', { size: 16 }))
       ));
     });
 
@@ -1986,7 +2124,7 @@ function showUnlock(message) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') unlock(); });
 
   clear(viewEl()).append(el('div', { style: 'max-width:380px;margin:12vh auto 0;text-align:center' },
-    el('div', { style: 'font-size:2.6rem' }, '🏋️'),
+    el('div', { class: 'hero-icon' }, icon('dumbbell', { size: 44 })),
     el('h2', { style: 'margin:14px 0 6px' }, 'BroSplit'),
     el('p', { class: 'muted tiny', style: 'margin:0 0 20px' },
       'This device needs the access key once. Paste it and it stays in this browser.'),

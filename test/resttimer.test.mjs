@@ -56,6 +56,9 @@ eq('heat 0 = the app grey', heatColor(0), '#8d82a3');
 eq('heat 0.5 = the app gold', heatColor(0.5), '#f0b429');
 eq('heat 1 = the app red', heatColor(1), '#f87171');
 eq('out of range clamps', [heatColor(-1), heatColor(3)], ['#8d82a3', '#f87171']);
+const LIGHT = ['#675b7d', '#8f5609', '#b4231f'];
+eq('light theme stops used when given', [heatColor(0, LIGHT), heatColor(0.5, LIGHT), heatColor(1, LIGHT)], LIGHT);
+eq('a stop it cannot read falls back', heatColor(0, ['', ' #8f5609', 'red']), '#8d82a3');
 
 console.log('\nbuzz: once, at the limit\n');
 eq('4:59 -> no', shouldBuzz(299_000, 300), false);

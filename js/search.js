@@ -43,6 +43,8 @@ const SYNONYM_GROUPS = [
 ];
 
 const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+/** How a query is compared: lowercase, punctuation dropped, spaces collapsed. */
+export const normalizeQuery = norm;
 
 const GROUPS_BY_WORD = new Map();
 for (const g of SYNONYM_GROUPS) for (const w of g) {
@@ -165,8 +167,9 @@ export function recentFrequency(sets, { today, days = 14 } = {}) {
  *   3. the old score, where muscle priority still separates equals
  *   4. name, A-Z
  * An empty query lists everything, most-trained first.
+ * `pinned`, when it matched, moves to the top regardless (learn.js).
  */
-export function searchExercises(exercises, query, { frequency = null } = {}) {
+export function searchExercises(exercises, query, { frequency = null, pinned = null } = {}) {
   const freq = (ex) => (frequency && frequency.get(ex.id)) || 0;
   const tokens = tokenize(query);
   if (!tokens.length) {
@@ -187,12 +190,18 @@ export function searchExercises(exercises, query, { frequency = null } = {}) {
     if (matchedAll) hits.push({ ex, score: total, cls });
   }
 
-  return hits
+  const out = hits
     .sort((a, b) => b.cls - a.cls
                  || freq(b.ex) - freq(a.ex)
                  || b.score - a.score
                  || a.ex.name.localeCompare(b.ex.name))
     .map((h) => h.ex);
+
+  // What this phone's owner usually picks for these words (learn.js) goes
+  // first — but only from among real matches, so it never adds a stray.
+  const i = pinned ? out.findIndex((ex) => ex.id === pinned) : -1;
+  if (i > 0) out.unshift(...out.splice(i, 1));
+  return out;
 }
 
 export const MUSCLES = [

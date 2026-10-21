@@ -1,6 +1,8 @@
 // Small DOM helpers. No framework — this has to run from a static GitHub Pages
 // host with no build step.
 
+import { icon } from './icons.js';
+
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -21,9 +23,9 @@ export function el(tag, attrs = {}, ...children) {
 export const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); return n; };
 
 let toastTimer;
-export function toast(msg) {
+export function toast(msg, iconName = null) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  t.replaceChildren(...(iconName ? [icon(iconName, { size: 16, cls: 'toast-icon' })] : []), msg);
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3000);

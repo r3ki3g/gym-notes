@@ -5,8 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#08060d">
 <title>BroSplit</title>
+<!-- Theme before the stylesheet paints anything, so the app under the always-
+     dark splash is already light when the splash fades. Dark is the default; Settings → Appearance writes gn.theme. -->
+<script>
+  try {
+    if (localStorage.getItem('gn.theme') === 'light') {
+      // the browser bar stays dark with the splash; app.js switches it after
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  } catch (e) {}
+</script>
 <link rel="stylesheet" href="styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🟣</text></svg>">
+<!-- browser-tab icon: the Lucide dumbbell (as in the tab bar) on the app purple -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23a855f7'/><g transform='translate(5 5) scale(.92)' fill='none' stroke='white' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'><path d='M14.4 14.4 9.6 9.6'/><path d='M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z'/><path d='m21.5 21.5-1.4-1.4'/><path d='M3.9 3.9 2.5 2.5'/><path d='M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z'/></g></svg>">
 </head>
 <body>
   <!-- Lives in the markup, not in JS, so it paints on the very first frame —
@@ -14,7 +25,9 @@
   <div id="splash">
     <div class="splash-name">BroSplit</div>
     <div class="splash-pro">PRO</div>
-    <div class="splash-progress"></div>
+    <!-- Work out → Log it → Track progress → Together (see .splash-steps) -->
+    <img class="splash-steps" src="images/splash-steps.gif" width="480" height="124"
+         alt="Work out, log it, track progress, together">
     <div class="splash-stage" id="splash-stage">starting…</div>
     <div class="splash-version" id="splash-version"></div>
   </div>
@@ -32,11 +45,11 @@
   <main id="view" aria-live="polite"></main>
 
   <nav id="tabs">
-    <button data-route="log"       type="button"><span>📋</span>Log</button>
-    <button data-route="history"   type="button"><span>📅</span>History</button>
-    <button data-route="exercises" type="button"><span>🏋️</span>Exercises</button>
-    <button data-route="alerts"    type="button"><span>🔔</span>Alerts</button>
-    <button data-route="settings"  type="button"><span>⚙️</span>Settings</button>
+    <button data-route="log"       type="button"><span class="tab-icon" data-icon="notebook-pen"></span>Log</button>
+    <button data-route="history"   type="button"><span class="tab-icon" data-icon="calendar-days"></span>History</button>
+    <button data-route="exercises" type="button"><span class="tab-icon" data-icon="dumbbell"></span>Exercises</button>
+    <button data-route="alerts"    type="button"><span class="tab-icon" data-icon="bell"></span>Alerts</button>
+    <button data-route="settings"  type="button"><span class="tab-icon" data-icon="settings"></span>Settings</button>
   </nav>
 
   <div id="toast" class="toast" role="status"></div>
@@ -55,7 +68,7 @@
         'js/search.js', 'js/units.js', 'js/ui.js', 'js/notify.js',
         'js/seed.js', 'js/version.js', 'js/usage.js',
         'js/progress.js', 'js/chart.js', 'js/edits.js', 'js/rest.js', 'js/notes.js',
-        'js/resttimer.js'
+        'js/resttimer.js', 'js/learn.js', 'js/icons.js'
       ];
       var shown = false;
 
@@ -64,7 +77,7 @@
         shown = true;
 
         var stage = document.getElementById('splash-stage');
-        var bar = document.querySelector('.splash-progress');
+        var bar = document.querySelector('.splash-steps');
         if (bar) bar.style.display = 'none';
         if (!stage) return;
 

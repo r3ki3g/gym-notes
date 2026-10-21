@@ -10,7 +10,46 @@
      #13101c: all five checks pass, colour-blind separation dE 32.8. The UI gold
      #f0b429 failed the dark-mode lightness band, hence the deeper gold here. */
   --series-me:#a855f7; --series-them:#c08812;
+
+  /* gold as a SURFACE (badges, the gold button) — separate from --gold, which
+     is gold as text and lines. Light mode has to darken the second, not the first. */
+  --gold-fill:#f0b429;
+  --gold-soft:#b99a4e; --gold-soft-hi:#d8b968;   /* secondary text on a gold wash */
+  --brand-mid:#e0a3ff; --shine:#fff3c4;          /* wordmark gradient, splash shine */
+  --bar-bg:rgba(8,6,13,.92); --tabbar-bg:rgba(8,6,13,.95);
+  --hairline:rgba(255,255,255,.04); --backdrop:rgba(0,0,0,.65);
+  --gold-wash:rgba(240,180,41,.07); --accent-wash:rgba(168,85,247,.14);
+  /* tinted outlines for tags and pills */
+  --line-warn:#4a3c18; --line-bad:#4a2230; --line-accent:#3b2d55; --line-warmup:#3f3216;
+  --line-gold:#6b5312; --line-edited:#5a4512; --line-chip:#43395c;
+  color-scheme:dark;
 }
+
+/* Light theme (Settings → Appearance), experimental. Every text/surface pair is
+   checked by scripts/contrast-audit.mjs: 4.5:1 for text, 3:1 for large text and
+   chart marks. Purple and gold both darken for text — the dark theme's #a855f7
+   is 4.2:1 on white and its gold 1.8:1 — while --gold-fill stays bright. */
+:root[data-theme="light"]{
+  --bg:#f4f1f8; --panel:#ffffff; --panel-2:#f1edf7; --line:#d9d0e6;
+  --text:#1b1426; --dim:#54486a; --faint:#675b7d;
+  --accent:#8b2fd9; --accent-ink:#ffffff;
+  --gold:#8f5609; --gold-dim:#fbf1d8;
+  --good:#167a3a; --warn:#9a4a06; --bad:#b4231f;
+  --series-me:#8b2fd9; --series-them:#a56708;
+  --gold-fill:#f0b429;
+  --gold-soft:#7d5410; --gold-soft-hi:#7d5410;
+  --brand-mid:#a823b0; --shine:#b07208;
+  --bar-bg:rgba(244,241,248,.92); --tabbar-bg:rgba(255,255,255,.95);
+  --hairline:rgba(40,20,70,.07); --backdrop:rgba(25,15,45,.4);
+  --gold-wash:rgba(196,138,10,.10); --accent-wash:rgba(139,47,217,.10);
+  --line-warn:#ecd3a6; --line-bad:#f0c4c2; --line-accent:#dcc8f3; --line-warmup:#e9d9b0;
+  --line-gold:#d7b45f; --line-edited:#dfc27e; --line-chip:#cdc1e0;
+  color-scheme:light;
+}
+/* the browser default placeholder grey is 4.0:1 on --panel-2 */
+:root[data-theme="light"] ::placeholder{color:var(--faint);opacity:1}
+/* warm-ups fade with grey text, not half opacity: .5 on white is 2.4:1 */
+:root[data-theme="light"] .is-warm .load,:root[data-theme="light"] .is-warm .muted{opacity:1;color:var(--faint)}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
@@ -28,18 +67,18 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
 #topbar{
   position:sticky;top:0;z-index:20;
   padding:calc(8px + env(safe-area-inset-top)) 12px 9px;
-  background:rgba(8,6,13,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  background:var(--bar-bg);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
 }
 .brandrow{display:flex;align-items:center;gap:8px}
 .brand{
   font-size:1.06rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
   flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  background:linear-gradient(95deg,var(--accent),#e0a3ff 55%,var(--gold));
+  background:linear-gradient(95deg,var(--accent),var(--brand-mid) 55%,var(--gold));
   -webkit-background-clip:text;background-clip:text;color:transparent;
 }
 .pro{
   font-size:.58rem;font-weight:900;letter-spacing:.14em;
-  background:linear-gradient(135deg,var(--gold),#ffd97a);color:#2b1f02;
+  background:linear-gradient(135deg,var(--gold-fill),#ffd97a);color:#2b1f02;
   border-radius:4px;padding:3px 6px;line-height:1;
 }
 
@@ -59,7 +98,7 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
 
 #tabs{
   position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);
-  background:rgba(8,6,13,.95);backdrop-filter:blur(8px);border-top:1px solid var(--line);
+  background:var(--tabbar-bg);backdrop-filter:blur(8px);border-top:1px solid var(--line);
   padding-bottom:env(safe-area-inset-bottom);
 }
 #tabs button{
@@ -67,7 +106,7 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
   background:none;border:0;color:var(--faint);padding:9px 4px;
   display:flex;flex-direction:column;align-items:center;gap:3px;font-size:.66rem;letter-spacing:.03em;
 }
-#tabs button span{font-size:1.22rem;line-height:1}
+#tabs button .tab-icon{display:block;width:22px;height:22px;line-height:0}
 .tab-dot{
   position:absolute;top:7px;right:calc(50% - 15px);
   width:8px;height:8px;border-radius:50%;background:var(--gold);
@@ -120,16 +159,16 @@ select{min-height:var(--tap)}
    a few seconds old. */
 @keyframes freshOther{
   0%,100%{box-shadow:inset 0 0 0 0 rgba(240,180,41,0); background:transparent}
-  50%    {box-shadow:inset 3px 0 0 0 var(--gold);      background:rgba(240,180,41,.07)}
+  50%    {box-shadow:inset 3px 0 0 0 var(--gold);      background:var(--gold-wash)}
 }
 @keyframes freshOwn{
-  0%  {box-shadow:inset 3px 0 0 0 var(--accent); background:rgba(168,85,247,.14)}
+  0%  {box-shadow:inset 3px 0 0 0 var(--accent); background:var(--accent-wash)}
   100%{box-shadow:inset 0 0 0 0 rgba(168,85,247,0); background:transparent}
 }
 .set-line.fresh-other{animation:freshOther 2s ease-in-out 15 both}
 .set-line.fresh-own{animation:freshOwn .9s ease-out 1 both}
 @media (prefers-reduced-motion:reduce){
-  .set-line.fresh-other{animation:none;box-shadow:inset 3px 0 0 0 var(--gold);background:rgba(240,180,41,.07)}
+  .set-line.fresh-other{animation:none;box-shadow:inset 3px 0 0 0 var(--gold);background:var(--gold-wash)}
   .set-line.fresh-own{animation:none}
 }
 
@@ -149,7 +188,7 @@ select{min-height:var(--tap)}
 .side-set{
   font-size:.8rem;
   padding:4px 0 4px 7px;margin-left:-7px;
-  border-bottom:1px solid rgba(255,255,255,.04);
+  border-bottom:1px solid var(--hairline);
 }
 .side-set:last-of-type{border-bottom:0}
 
@@ -163,7 +202,7 @@ select{min-height:var(--tap)}
 /* A warm-up must not read as a heavy working set — the exact confusion this
    change exists for. Gold W in the index plus a receding load. */
 .is-warm .load,.is-warm .muted{opacity:.5}
-.side-set.fresh-other{box-shadow:inset 3px 0 0 0 var(--gold);background:rgba(240,180,41,.07);border-radius:3px}
+.side-set.fresh-other{box-shadow:inset 3px 0 0 0 var(--gold);background:var(--gold-wash);border-radius:3px}
 .side-set.fresh-own{box-shadow:inset 3px 0 0 0 var(--accent);border-radius:3px}
 .side-empty{color:var(--faint);font-size:.75rem;padding:8px 0;text-align:center}
 /* The right column's own header. Styled to match the plain name on the left —
@@ -189,7 +228,7 @@ select{min-height:var(--tap)}
 .tile{
   font-size:.76rem;color:var(--dim);
   padding:6px 0 6px 7px;margin-left:-7px;
-  border-bottom:1px solid rgba(255,255,255,.04);
+  border-bottom:1px solid var(--hairline);
 }
 .tile:last-child{border-bottom:0}
 .tile .tile-head .load{color:var(--text);font-weight:600}
@@ -206,9 +245,9 @@ select{min-height:var(--tap)}
 }
 /* dashed: a warm-up "does not count", which a solid tag would not say */
 .tag-warm{color:var(--faint);border-style:dashed}
-.tag-sup{color:var(--warn);border-color:#4a3c18}
-.tag-fail{color:var(--bad);border-color:#4a2230}
-.tag-drop{color:var(--accent);border-color:#3b2d55}
+.tag-sup{color:var(--warn);border-color:var(--line-warn)}
+.tag-fail{color:var(--bad);border-color:var(--line-bad)}
+.tag-drop{color:var(--accent);border-color:var(--line-accent)}
 
 .side-add{
   width:100%;margin-top:8px;background:var(--panel-2);border:1px solid var(--line);
@@ -223,7 +262,14 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
   padding:0 15px;min-height:var(--tap);font-weight:600;white-space:nowrap;
 }
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-.btn.danger{color:var(--bad);border-color:#4a2230}
+/* Lucide line icons (js/icons.js), drawn in currentColor */
+.icon{flex:none;vertical-align:middle}
+.btn > .icon:only-child{display:block;margin:auto}
+.btn.with-icon{display:inline-flex;align-items:center;gap:6px}
+.hero-icon{display:flex;justify-content:center;color:var(--accent)}
+.inline-chart-hint .icon{vertical-align:-2px}
+.toast-icon{vertical-align:-3px;margin-right:7px;color:var(--gold)}
+.btn.danger{color:var(--bad);border-color:var(--line-bad)}
 .btn.block{width:100%}
 .btn.big{min-height:66px;font-size:1.05rem;border-radius:11px}
 .btn.sm{min-height:34px;padding:0 10px;font-size:.8rem;font-weight:500}
@@ -238,7 +284,7 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 
 .pill{display:inline-block;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:.72rem;color:var(--dim)}
 .pill.primary-muscle{border-color:var(--accent);color:var(--accent)}
-.pill.warmup{border-color:#3f3216;color:var(--warn)}
+.pill.warmup{border-color:var(--line-warmup);color:var(--warn)}
 /* entered by the other person, on this profile's behalf */
 .forwho{
   display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;
@@ -247,16 +293,16 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 }
 .forwho .tiny{color:var(--faint);font-size:.72rem}
 .forwho strong{font-size:.95rem}
-.forwho.other{border-color:#6b5312;background:var(--gold-dim)}
+.forwho.other{border-color:var(--line-gold);background:var(--gold-dim)}
 .forwho.other strong{color:var(--gold)}
-.forwho.other .tiny{color:#b99a4e}
+.forwho.other .tiny{color:var(--gold-soft)}
 
 /* who typed it: quiet on purpose — it is the least important thing on the row */
 .by{display:inline-flex;align-items:center;gap:3px;color:var(--faint);font-size:.74rem;white-space:nowrap}
 .by-icon{width:8px;height:11px;fill:none;stroke:currentColor;stroke-width:1.3;flex:none}
 
 /* the profile chip goes gold whenever you are logging for someone else */
-.chip.viewing{border-color:#43395c;color:var(--text);background:transparent}
+.chip.viewing{border-color:var(--line-chip);color:var(--text);background:transparent}
 .chip.viewing::after{color:var(--dim)}
 .viewing-note{
   background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
@@ -303,7 +349,8 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .manage-main:active{background:var(--panel-2)}
 .manage-chart{
   flex:none;width:50px;background:transparent;border:0;border-left:1px solid var(--line);
-  font-size:1.1rem;line-height:1;
+  font-size:1.1rem;line-height:1;color:var(--accent);
+  display:flex;align-items:center;justify-content:center;
 }
 .manage-chart:active{background:var(--panel-2)}
 .manage-row .name{font-weight:500;font-size:.94rem}
@@ -321,15 +368,15 @@ label.field > span{display:block;font-size:.74rem;color:var(--dim);margin-bottom
 .lasttime{background:var(--panel-2);border-left:2px solid var(--accent);border-radius:0 9px 9px 0;padding:9px 12px;margin-bottom:12px;font-size:.85rem}
 
 dialog{border:0;background:transparent;padding:0;max-width:100%}
-dialog::backdrop{background:rgba(0,0,0,.65)}
+dialog::backdrop{background:var(--backdrop)}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;width:min(94vw,520px)}
 
 .feed-item{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--line)}
 .feed-item:last-child{border-bottom:0}
-.feed-item.fresh .feed-icon{background:var(--gold-dim);border-color:var(--gold)}
+.feed-item.fresh .feed-icon{background:var(--gold-dim);border-color:var(--gold);color:var(--gold)}
 .feed-icon{
   width:34px;height:34px;border-radius:50%;flex:none;
-  background:var(--panel-2);border:1px solid var(--line);
+  background:var(--panel-2);border:1px solid var(--line);color:var(--dim);
   display:flex;align-items:center;justify-content:center;font-size:1rem;
 }
 .feed-when{color:var(--faint);font-size:.72rem;white-space:nowrap}
@@ -343,7 +390,15 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 
 
 /* ---------- boot splash ---------- */
+/* Always dark, whatever Settings → Appearance says: the loading screen is the
+   brand moment, and the steps animation is drawn on dark. The dark values are
+   pinned here so the light theme's tokens never reach it. */
 #splash{
+  --bg:#08060d; --faint:#8d82a3; --bad:#f87171;
+  --accent:#a855f7; --accent-ink:#17082b;
+  --gold:#f0b429; --gold-fill:#f0b429;
+  --brand-mid:#e0a3ff; --shine:#fff3c4;
+  color-scheme:dark;
   position:fixed;inset:0;z-index:100;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   background:var(--bg);
@@ -356,9 +411,9 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 .splash-name{font-size:clamp(1.35rem,6vw,1.5rem);font-weight:800;line-height:1.1;
   letter-spacing:.14em;text-transform:uppercase;
   background:linear-gradient(100deg,
-    var(--accent) 0%, #e0a3ff 28%,
-    #fff3c4 44%, var(--gold) 52%,   /* the shine band */
-    #e0a3ff 70%, var(--accent) 100%);
+    var(--accent) 0%, var(--brand-mid) 28%,
+    var(--shine) 44%, var(--gold) 52%,   /* the shine band */
+    var(--brand-mid) 70%, var(--accent) 100%);
   background-size:260% 100%;
   -webkit-background-clip:text;background-clip:text;color:transparent;
   animation:shine 2.8s linear infinite;   /* exactly two progress sweeps */
@@ -373,7 +428,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
   position:relative;overflow:hidden;margin-top:12px;
   font-size:.68rem;font-weight:900;letter-spacing:.22em;line-height:1;
   color:#2b1f02;border-radius:6px;padding:6px 11px 6px 13px;   /* letter-spacing trails: less on the right */
-  background:linear-gradient(135deg,#a67c0a,var(--gold) 38%,#ffeaa3 50%,var(--gold) 62%,#a67c0a);
+  background:linear-gradient(135deg,#a67c0a,var(--gold-fill) 38%,#ffeaa3 50%,var(--gold-fill) 62%,#a67c0a);
   box-shadow:0 2px 14px rgba(240,180,41,.34);
 }
 .splash-pro::after{
@@ -386,20 +441,15 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
   0%,58%{transform:translateX(-130%)}
   100%  {transform:translateX(130%)}
 }
-/* indeterminate progress — a gold highlight crossing a hairline track */
-.splash-progress{
-  width:160px;height:2px;margin-top:24px;border-radius:2px;
-  background:var(--line);overflow:hidden;
-}
-.splash-progress::after{
-  content:'';display:block;height:100%;width:38%;
-  background:linear-gradient(90deg,transparent,var(--gold),#fff0bd,var(--gold),transparent);
-  animation:sweep 1.4s ease-in-out infinite;
-}
-@keyframes sweep{
-  from{transform:translateX(-110%)}
-  to  {transform:translateX(375%)}
-}
+/* The four steps: images/splash-steps.gif, a 2s loop where a dot runs Work out
+   → Log it → Track progress → Together. Cut from the ChatGPT animation
+   bro-split-animation.gif (720×260, 120 KB): cropped to its x 121–600,
+   y 108–231 so its own low-res wordmark is gone, background set to exactly
+   --bg so there is no edge in dark mode, and each frame after the first
+   stores only the pixels that change. 480×124, 27 KB, otherwise pixel for
+   pixel the same. The splash is always dark, so it always sits on its own
+   background. */
+.splash-steps{display:block;width:min(300px, 74vw);height:auto;margin-top:22px}
 
 .splash-stage{
   margin-top:8px;font-size:.76rem;color:var(--faint);
@@ -421,9 +471,8 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 }
 
 @media (prefers-reduced-motion:reduce){
-  .splash-name,.splash-pro::after,.splash-progress::after{animation:none}
+  .splash-name,.splash-pro::after{animation:none}
   .splash-name{background-position:50% 0}
-  .splash-progress::after{width:100%}
 }
 
 
@@ -495,6 +544,10 @@ body.is-editing{
   --accent:#f0b429; --accent-ink:#17082b;
   background:var(--bg);
 }
+:root[data-theme="light"] body.is-editing{
+  --bg:#faf5e9; --panel:#fffdf8; --panel-2:#f7eedb; --line:#e3cf9f;
+  --accent:#8f5609; --accent-ink:#ffffff;
+}
 .edit-form{border-color:var(--gold);box-shadow:0 0 0 1px rgba(240,180,41,.25)}
 .edit-banner{
   display:flex;gap:11px;align-items:center;
@@ -502,15 +555,15 @@ body.is-editing{
   background:var(--gold-dim);border:1px solid var(--gold);color:var(--gold);
 }
 .edit-banner strong{color:var(--gold);font-size:.95rem}
-.edit-banner .tiny{color:#d8b968;font-size:.74rem;margin-top:1px}
-.edit-banner-icon{font-size:1.4rem;line-height:1;flex:none}
-.btn.gold{background:var(--gold);color:#2b1f02;border-color:var(--gold)}
+.edit-banner .tiny{color:var(--gold-soft-hi);font-size:.74rem;margin-top:1px}
+.edit-banner-icon{line-height:0;flex:none}
+.btn.gold{background:var(--gold-fill);color:#2b1f02;border-color:var(--gold-fill)}
 .btn.edit-btn{color:var(--dim);min-width:34px;padding:0 8px}
 /* Compact for the half-width columns: the standard 34px button roughly doubled
    each row's height. 26px still clears the 24px minimum tap target. */
-.side-set .btn.edit-btn{min-width:26px;min-height:26px;height:26px;padding:0 6px;font-size:.78rem;border-radius:6px;align-self:center}
+.side-set .btn.edit-btn{min-width:26px;min-height:26px;height:26px;padding:0 5px;font-size:.78rem;border-radius:6px;align-self:center}
 .side-set .tile-head{align-items:center}
-.tag-edited{color:var(--gold);border-color:#5a4512}
+.tag-edited{color:var(--gold);border-color:var(--line-edited)}
 
 /* time between consecutive sets: a quiet timeline gap, not a row of its own */
 .rest-gap{
@@ -519,7 +572,7 @@ body.is-editing{
   font-size:.68rem;color:var(--faint);font-variant-numeric:tabular-nums;
 }
 .rest-gap::after{content:"";flex:1;border-top:1px dashed var(--line);margin-left:2px}
-.rest-gap-icon{font-size:.72rem;opacity:.75}
+.rest-gap-icon{opacity:.75;flex:none}
 
 /* live rest: counts up under the last set while resting. Bigger than the Rest:
    rows, and shades grey -> gold -> red as it nears the limit (--heat, set by the
@@ -548,6 +601,15 @@ body.is-editing{
   18%{transform:scale(1)}
   26%{transform:scale(1.09)}
 }
+/* search: the result this phone's owner usually picks for these words */
+.learned-pill{color:var(--gold);border-color:var(--line-gold);display:inline-flex;align-items:center;gap:4px}
+/* Settings → Search → Show my picks */
+.pick-row{display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid var(--line)}
+.pick-row:last-child{border-bottom:0}
+.pick-phrase{font-weight:700;color:var(--gold);font-size:.9rem}
+.pick-main{font-size:.93rem;margin-top:2px}
+.pick-row .meta{color:var(--faint);font-size:.74rem;margin-top:3px}
+.pick-also{color:var(--faint);font-size:.74rem;margin-top:2px}
 .limit-val{min-width:44px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
 
 /* quick-add notes: one sideways-scrolling row, so they cost a single line of

@@ -11,6 +11,144 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.26.1] — 10/21/26
+
+### Changed
+- **The loading screen is always dark**, whatever Settings → Appearance says.
+  The dark colours are pinned on the splash itself, so the light theme's never
+  reach it. The phone's browser bar stays dark during the splash too, and
+  switches to light only after it fades, onto a light app.
+
+---
+
+## [1.26.0] — 10/21/26
+
+### Changed
+- **Loading screen: the sliding bar is replaced by the four-step animation**
+  (`images/splash-steps.gif`): Work out → Log it → Track progress → Together,
+  with a dot running between them on a 2-second loop. It sits under the
+  BroSplit wordmark, centred, at most 300px wide.
+- The GIF is made from the ChatGPT animation `images/bro-split-animation.gif`:
+  - Cropped to just the steps and labels, so its low-res wordmark is gone.
+  - Kept at full resolution, because phones already stretch it about 2×.
+  - Background set to exactly the app's dark colour, so it has no visible
+    edge. In light mode it shows as a small dark card.
+  - Each frame after the first stores only the pixels that change.
+  - Result: **27 KB, down from 120 KB**. Checked by decoding all 20 frames: every
+    one of 1,190,400 pixels matches the original apart from the background.
+- The startup error screen hides the animation, as it hid the bar.
+
+---
+
+## [1.25.0] — 10/21/26
+
+### Changed
+- **Emoji icons replaced with Lucide line icons** (v0.460.0, ISC licence;
+  `js/icons.js`). The emoji made the app look generic, and Samsung and Pixel
+  each drew their own. The line icons take the text colour, so the active tab
+  turns purple and every icon follows dark and light mode.
+  - Tab bar: notebook-pen, calendar-days, dumbbell, bell, settings.
+  - Progress: chart-line. Rest rows: timer. Edit: pencil. Close and remove: x.
+    "Your pick": rotate-ccw.
+  - The alerts feed and the "X logged a set" toast use the dumbbell. The unlock
+    and "who is using this phone" screens use a dumbbell and a hand.
+  - Browser-tab icon: a white dumbbell on the app purple, instead of 🟣.
+  - Icon-only buttons now have labels for screen readers.
+- Kept: 💪 in the "Chad 💪" quick note, since that's a message, not an icon. The
+  text arrows (→ ↓ ›) also stay.
+- The pencil button on the exercise screen is as wide as the old ✎ one, 26px.
+  The first build was 28px, and that wrapped "×12 ea" on drop-set rows.
+
+---
+
+## [1.24.0] — 10/21/26
+
+### Added
+- **Set form: "kg/side" and "Each side" ask before leaving the exercise's
+  setting.** The sheet names the exercise and what it's set up for, offers
+  **Change for this set**, and points to editing the exercise to change it for
+  every set. Going back to the exercise's setting doesn't ask, and Warm-up never
+  asks. A wrong flip silently halves or doubles a set, and the defaults weren't
+  being trusted.
+
+### Changed
+- The picks page is titled with the phone owner's name, for example
+  "Prabhashwara's usual picks", so it's clear whose habits they are.
+
+---
+
+## [1.23.0] — 10/21/26
+
+### Added
+- **Settings → Search → "Show my picks (N)"** opens **My usual picks**. Each row
+  shows a phrase you typed, the exercise search now puts first for it, how many
+  picks and how long ago, and anything else you picked for the same words.
+  Each row has its own **Delete**, and **Delete all** sits at the bottom with a
+  confirm. The Settings tab stays lit while you're on this page.
+
+### Changed
+- "Forget my usual picks" in Settings is replaced by this page.
+
+---
+
+## [1.22.1] — 10/21/26
+
+### Changed
+- **Set form: "Done" is now a red "Cancel without saving"**, matching the edit
+  screen. It only ever went back and dropped what was typed, but the neutral
+  "Done" read like a save.
+- **Settings → Search**, a new section holding both search options, renamed to
+  read as search settings: "Most-done exercises first" and "Put my usual pick
+  first" (formerly "Learn from my picks"), plus "Forget my usual picks (N)".
+  The stored preferences are unchanged, so nothing resets.
+
+---
+
+## [1.22.0] — 10/21/26
+
+### Added
+- **Search learns each phone's picks.** Tap a result after typing and those
+  words put that exercise first next time, marked "↺ your pick". It also works
+  from the start of the phrase: after picking with "raise", typing "ra" is
+  enough.
+  - It only reorders exercises that already match, and never adds one that
+    doesn't.
+  - The phrase typed exactly beats longer phrases that start with it. Most picks
+    wins, and a tie goes to the latest tap, so a wrong tap washes out.
+  - Picks are forgotten after 60 days, and at most 200 phrases are kept.
+  - Kept in this phone's browser only, so each person's habits stay their own.
+  - Only the log picker learns. The Exercises tab uses what it learned, since
+    tapping there means edit.
+- **Settings → Display:** "Learn from my picks" (on), and "Forget learned
+  searches (N)" with a confirm. Spec: `docs/search-learning-spec.md`.
+
+---
+
+## [1.21.0] — 10/21/26
+
+### Added
+- **Light theme (experimental):** Settings → Appearance → Theme. Dark stays the
+  default. It applies before the first paint, so light never flashes dark, and
+  the phone's browser bar follows the theme.
+  - Purple and gold both darken for text in light mode: the dark theme's purple
+    is 4.2:1 on white and its gold 1.8:1. Gold badges and buttons keep the bright
+    gold.
+  - Warm-up rows fade with grey text instead of half opacity, which would be
+    2.4:1 on white.
+  - The rest timer shades through the light theme's own grey, gold and red.
+- **`scripts/contrast-audit.mjs`** measures every visible piece of text on every
+  screen, in both themes, against what is actually painted behind it. It also
+  covers chart lines and markers, placeholders, the edit form, a confirm sheet
+  and the splash. Light result: 1,185 elements on 15 screens, and 3 fail. All 3
+  are deliberately faint and the same in dark: the two version labels and the
+  PRO plate's dark corners.
+
+### Changed
+- Every hard-coded colour in `styles.css` is now a token. The dark theme renders
+  exactly as before.
+
+---
+
 ## [1.20.0] — 10/21/26
 
 ### Added

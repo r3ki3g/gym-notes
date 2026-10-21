@@ -60,18 +60,22 @@ export function restHeat(elapsedMs, limitSec) {
 }
 
 // The app's own --faint, --gold and --bad, so the timer shades through colours
-// that already mean "quiet", "attention" and "problem" everywhere else.
-const GREY  = [0x8d, 0x82, 0xa3];
-const AMBER = [0xf0, 0xb4, 0x29];
-const RED   = [0xf8, 0x71, 0x71];
+// that already mean "quiet", "attention" and "problem" everywhere else. These
+// are the dark theme's; the app passes the current theme's in.
+export const HEAT_STOPS = ['#8d82a3', '#f0b429', '#f87171'];
 
+const rgb = (h) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(h).trim());
+  return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : null;
+};
 const mix = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * t));
-const hex = (rgb) => '#' + rgb.map((x) => x.toString(16).padStart(2, '0')).join('');
+const hex = (c) => '#' + c.map((x) => x.toString(16).padStart(2, '0')).join('');
 
-/** Grey at 0, amber at 0.5, red at 1. */
-export function heatColor(heat) {
+/** Grey at 0, amber at 0.5, red at 1. Unreadable stops fall back to the dark theme's. */
+export function heatColor(heat, stops = HEAT_STOPS) {
+  const [g, a, r] = stops.map((c, i) => rgb(c) || rgb(HEAT_STOPS[i]));
   const h = Math.min(1, Math.max(0, heat));
-  return hex(h <= 0.5 ? mix(GREY, AMBER, h * 2) : mix(AMBER, RED, (h - 0.5) * 2));
+  return hex(h <= 0.5 ? mix(g, a, h * 2) : mix(a, r, (h - 0.5) * 2));
 }
 
 /** True during the minute after the limit passes. */
