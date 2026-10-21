@@ -11,6 +11,22 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.30.1] — 10/21/26
+
+### Fixed
+- **The chart's entrance could still play unseen.** It started once 40% of the
+  chart was on screen, and that's checked the moment the screen opens. So a
+  chart peeking above the bottom edge played while you were still reading the
+  sets, and was finished by the time you scrolled to it. It now waits until
+  90% is in view.
+  - Verified on a desktop window sized so 30%, 60% and 85% of the chart
+    showed on open: all three stayed frozen for 3s, then played on the first
+    scroll.
+  - Still once per visit. Resizing the window after the chart has played
+    doesn't replay it; leave the screen and come back to see it again.
+
+---
+
 ## [1.30.0] — 10/21/26
 
 ### Changed

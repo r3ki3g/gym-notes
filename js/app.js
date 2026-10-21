@@ -1591,8 +1591,9 @@ function appendProgressChart(v, ex, people, { inline = false } = {}) {
     const key = (inline ? 'inline|' : 'page|') + exerciseId + '|' + metric;
     // The exercise screen's chart often sits below a long list of last time's
     // sets, so its entrance played out of sight. Inline, it now waits, paused
-    // on its first frame, until 40% of it is on screen, then plays once. A
-    // rebuild while it waits keeps waiting; one mid-entrance carries on.
+    // on its first frame, until 90% of it is on screen, then plays once. (40%
+    // let a chart peeking above the fold play while you were still reading the
+    // sets.) A rebuild while it waits keeps waiting; one mid-entrance carries on.
     if (key !== animatedKey) { animatedKey = key; animatedAt = inline && chartAnimOn() ? 0 : Date.now(); }
     const waiting = animatedAt === 0;
     const elapsed = waiting ? 0 : Date.now() - animatedAt;
@@ -1605,7 +1606,7 @@ function appendProgressChart(v, ex, people, { inline = false } = {}) {
         chartWatch?.disconnect(); chartWatch = null;
         if (animatedKey === key && animatedAt === 0) animatedAt = Date.now();
         plot.classList.remove('paused');
-      }, { threshold: 0.4 });
+      }, { threshold: 0.9 });
       chartWatch.observe(plot);
     }
     drawChart(plot, {
