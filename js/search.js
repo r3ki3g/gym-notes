@@ -88,55 +88,110 @@ function muscleScore(ex, needle) {
  * ONLY — otherwise "hamstrings" would expand to "ham", prefix-match "hammer",
  * and surface Hammer curl.
  */
+// How well a query word matched, for ordering. A proper name match comes first,
+// whatever the muscles say: typing "chest" should put "Chest supported row"
+// above "Flat bench press". Muscle priority still decides between equals.
+export const MATCH = { EXACT: 4, PREFIX: 3, PARTIAL: 2, MUSCLE: 1, NONE: 0 };
+
+/**
+ * Best score for one typed token, and how well it matched (MATCH), or score 0
+ * if it matches nothing.
+ *
+ * The typed word gets full search-as-you-type matching: exact, prefix, and
+ * substring. Alternatives from a synonym group match whole words or phrases
+ * ONLY — otherwise "hamstrings" would expand to "ham", prefix-match "hammer",
+ * and surface Hammer curl.
+ */
 function scoreToken(ex, token) {
   const nameWords = norm(ex.name).split(' ');
   const nameText  = ' ' + norm(ex.name) + ' ';
   const aliasNorm = (ex.aliases || []).map(norm);
 
-  let best = muscleScore(ex, token);
+  let best = 0, cls = MATCH.NONE;
+  const hit = (score, c) => { best = Math.max(best, score); cls = Math.max(cls, c); };
+
+  const m = muscleScore(ex, token);
+  if (m) hit(m, MATCH.MUSCLE);
 
   for (const w of nameWords) {
-    if (w === token)              best = Math.max(best, NAME_EXACT);
-    else if (w.startsWith(token)) best = Math.max(best, NAME_PREFIX);
-    else if (token.length >= 4 && w.includes(token)) best = Math.max(best, NAME_SUBSTRING);
+    if (w === token)              hit(NAME_EXACT, MATCH.EXACT);
+    else if (w.startsWith(token)) hit(NAME_PREFIX, MATCH.PREFIX);
+    else if (token.length >= 4 && w.includes(token)) hit(NAME_SUBSTRING, MATCH.PARTIAL);
   }
   for (const a of aliasNorm) {
-    if (a.split(' ').some((w) => w === token || w.startsWith(token))) best = Math.max(best, ALIAS);
+    if (a.split(' ').some((w) => w === token || w.startsWith(token))) hit(ALIAS, MATCH.PARTIAL);
   }
 
   for (const alt of alternativesFor(token)) {
-    best = Math.max(best, muscleScore(ex, alt));
-    if (nameText.includes(' ' + alt + ' ')) best = Math.max(best, NAME_EXACT);
-    if (aliasNorm.some((a) => (' ' + a + ' ').includes(' ' + alt + ' '))) best = Math.max(best, ALIAS);
+    const am = muscleScore(ex, alt);
+    if (am) hit(am, MATCH.MUSCLE);
+    // a synonym found as a whole word in the name is as good as typing it
+    if (nameText.includes(' ' + alt + ' ')) hit(NAME_EXACT, MATCH.EXACT);
+    if (aliasNorm.some((a) => (' ' + a + ' ').includes(' ' + alt + ' '))) hit(ALIAS, MATCH.PARTIAL);
   }
 
-  return best;
+  return { score: best, cls };
 }
 
 /**
- * @returns exercises that matched every token, best first.
- * Empty query returns everything alphabetically.
+ * Days each exercise was trained in the last `days` days (today included),
+ * across everyone. Days, not sets: five sets in one session is one session.
+ *
+ * @param sets   any held sets, each with exerciseId and date (YYYY-MM-DD)
+ * @param today  YYYY-MM-DD
+ * @returns Map exerciseId -> distinct days
  */
-export function searchExercises(exercises, query) {
+export function recentFrequency(sets, { today, days = 14 } = {}) {
+  const cutoff = new Date(today + 'T00:00:00Z');
+  cutoff.setUTCDate(cutoff.getUTCDate() - (days - 1));
+  const since = cutoff.toISOString().slice(0, 10);
+
+  const seen = new Map();
+  for (const s of sets) {
+    if (!s.exerciseId || !s.date || s.date < since || s.date > today) continue;
+    if (!seen.has(s.exerciseId)) seen.set(s.exerciseId, new Set());
+    seen.get(s.exerciseId).add(s.date);
+  }
+  const out = new Map();
+  for (const [id, d] of seen) out.set(id, d.size);
+  return out;
+}
+
+/**
+ * Exercises that matched every query word, ordered by:
+ *   1. how well the NAME matched — the weakest word decides, so "tricep
+ *      extension" only counts as a name match if both words are in the name
+ *   2. how often it was trained recently (`frequency`, from recentFrequency)
+ *   3. the old score, where muscle priority still separates equals
+ *   4. name, A-Z
+ * An empty query lists everything, most-trained first.
+ */
+export function searchExercises(exercises, query, { frequency = null } = {}) {
+  const freq = (ex) => (frequency && frequency.get(ex.id)) || 0;
   const tokens = tokenize(query);
   if (!tokens.length) {
-    return [...exercises].sort((a, b) => a.name.localeCompare(b.name));
+    return [...exercises].sort((a, b) => freq(b) - freq(a) || a.name.localeCompare(b.name));
   }
 
   const hits = [];
   for (const ex of exercises) {
     let total = 0;
+    let cls = MATCH.EXACT;
     let matchedAll = true;
     for (const t of tokens) {
-      const s = scoreToken(ex, t);
-      if (s === 0) { matchedAll = false; break; }
-      total += s;
+      const r = scoreToken(ex, t);
+      if (r.score === 0) { matchedAll = false; break; }
+      total += r.score;
+      cls = Math.min(cls, r.cls);
     }
-    if (matchedAll) hits.push({ ex, score: total });
+    if (matchedAll) hits.push({ ex, score: total, cls });
   }
 
   return hits
-    .sort((a, b) => b.score - a.score || a.ex.name.localeCompare(b.ex.name))
+    .sort((a, b) => b.cls - a.cls
+                 || freq(b.ex) - freq(a.ex)
+                 || b.score - a.score
+                 || a.ex.name.localeCompare(b.ex.name))
     .map((h) => h.ex);
 }
 

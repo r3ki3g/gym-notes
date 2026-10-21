@@ -2,11 +2,12 @@ import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
          parseAccessKey, getDeviceOwner, saveDeviceOwner, KEY_DELIMITER } from './firebase.js';
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
-import { searchExercises, MUSCLES } from './search.js';
+import { searchExercises, recentFrequency, MUSCLES } from './search.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
 import { CHART_METRICS, buildProgress } from './progress.js';
 import { draftFromSet, editPatch, changedFields } from './edits.js';
 import { byTime, restGaps, formatRest } from './rest.js';
+import { restingAfter, restHeat, heatColor, shouldBuzz, parseLimit, stepLimit, LIVE_MAX_MS } from './resttimer.js';
 import { QUICK_NOTES, hasNote, toggleNote } from './notes.js';
 import { drawChart, formatValue } from './chart.js';
 import { UNITS, formatLoad, formatSetLoad, formatReps, formatEffort, formatEffortCompact, formatDuration, setVolumeKg,
@@ -15,7 +16,7 @@ import { el, clear, toast, confirmSheet, promptSheet, segmented, field, dayLabel
 import { VERSION } from './version.js';
 import { parseBrowser, createTracker, sessionId, deviceId, deviceHints, friendlyModel, FLUSH_MS } from './usage.js';
 import { chime, soundOn, setSound, notifOn, setNotif, primeAudio,
-         vibrateOn, setVibrate, vibrateSupported, buzzTest } from './notify.js';
+         vibrateOn, setVibrate, vibrateSupported, buzzTest, buzzRest } from './notify.js';
 
 /* ============================ state ============================ */
 
@@ -85,7 +86,18 @@ let curHash = location.hash;
 window.addEventListener('hashchange', () => {
   prevHash = curHash;
   curHash = location.hash;
-  if (route()[0] !== 'progress') animatedKey = null;
+  // Arriving at a chart plays its entrance again — except coming back to an
+  // exercise from logging or editing a set there, which happens after every
+  // single set and would replay a 2.6s animation twenty times a workout.
+  //
+  // The set and edit forms have no chart, so going INTO them must not clear
+  // the key either — clearing on the way out was the first version's bug: the
+  // round trip exercise -> set form -> exercise replayed every time.
+  const from = (prevHash || '').slice(2).split('/')[0];
+  const to = route()[0];
+  const intoForm = to === 'set' || to === 'edit';
+  const backFromForm = to === 'ex' && (from === 'set' || from === 'edit');
+  if (!intoForm && !backFromForm) animatedKey = null;
   formDirty = false;
   tracker?.screen(route()[0] || 'log');
   render();
@@ -94,6 +106,14 @@ window.addEventListener('hashchange', () => {
 // "5s ago" has to keep counting. Only ticks while the Alerts tab is open, so it
 // costs nothing the rest of the time.
 setInterval(() => { if (route()[0] === 'alerts') render(); }, 15000);
+
+// The live rest timer ticks every second. It repaints its own rows in place: a
+// full render() each second would reset scroll, forms and chart entrances.
+setInterval(() => {
+  const now = Date.now();
+  for (const row of document.querySelectorAll('.rest-live')) paintRestLive(row, now);
+  checkRestBuzz(now);
+}, 1000);
 
 /**
  * Re-render triggered by a Firestore snapshot rather than by navigation.
@@ -566,11 +586,62 @@ function viewSettings(v) {
   ));
 
   v.append(toggleRow(
+    'Show progress chart on exercise screen',
+    'The chart appears under the sets as soon as you pick an exercise',
+    inlineChartOn,
+    (on) => { try { localStorage.setItem('gn.inlineChart', on ? '1' : '0'); } catch {} }
+  ));
+  v.append(toggleRow(
+    'Most-done exercises first in search',
+    'Ranks by how many days you two did each one in the last 2 weeks. Off: A–Z. Name matches still come first either way',
+    searchFreqOn,
+    (on) => { try { localStorage.setItem('gn.searchFreq', on ? '1' : '0'); } catch {} }
+  ));
+  v.append(toggleRow(
     'Animate charts',
     'Lines draw in and dots drop into place when a chart opens',
     chartAnimOn,
     (on) => { try { localStorage.setItem('gn.chartAnim', on ? '1' : '0'); } catch {} }
   ));
+
+  // --- rest timer ----------------------------------------------------------
+  v.append(el('h3', {}, 'Rest timer'));
+  v.append(toggleRow(
+    'Live rest timer',
+    'Counts up under the last set, turning red as it reaches the limit',
+    liveRestOn,
+    (on) => { try { localStorage.setItem('gn.liveRest', on ? '1' : '0'); } catch {} }
+  ));
+  const limitVal = el('span', { class: 'limit-val' }, formatRest(restLimit() * 1000));
+  const nudgeLimit = (dir) => {
+    const next = stepLimit(restLimit(), dir);
+    try { localStorage.setItem('gn.restLimit', String(next)); } catch {}
+    limitVal.textContent = formatRest(next * 1000);
+  };
+  v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2)' },
+    el('div', { class: 'grow' },
+      el('div', {}, 'Rest limit'),
+      el('div', { class: 'tiny faint', style: 'margin-top:2px' }, 'Red, and a buzz, after this long')),
+    el('button', { class: 'btn sm', 'aria-label': 'Shorter', onClick: () => nudgeLimit(-1) }, '−'),
+    limitVal,
+    el('button', { class: 'btn sm', 'aria-label': 'Longer', onClick: () => nudgeLimit(1) }, '+')
+  ));
+  if (vibrateSupported()) {
+    v.append(toggleRow(
+      'Vibrate at limit',
+      'One buzz when your or your partner\'s rest passes the limit — only while the app is open and the screen is on',
+      restBuzzOn,
+      (on) => { try { localStorage.setItem('gn.restBuzz', on ? '1' : '0'); } catch {} if (on) buzzTest(); }
+    ));
+  } else {
+    v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2);opacity:.6' },
+      el('div', { class: 'grow' },
+        el('div', {}, 'Vibrate at limit'),
+        el('div', { class: 'tiny faint', style: 'margin-top:2px' },
+          'Not supported by this browser — iOS has never shipped it')),
+      el('span', { class: 'pill' }, 'N/A')
+    ));
+  }
 
   // --- alerts --------------------------------------------------------------
   v.append(el('h3', {}, 'Alerts'));
@@ -664,6 +735,59 @@ function enteredOn(name) {
 
 /** Settings → "Show time between sets". On by default — turning it off is the opt-out. */
 const restOn = () => { try { return localStorage.getItem('gn.showRest') !== '0'; } catch { return true; } };
+
+/** Settings → Rest timer. Both on by default; the limit defaults to 5:00. */
+const liveRestOn = () => { try { return localStorage.getItem('gn.liveRest') !== '0'; } catch { return true; } };
+const restBuzzOn = () => { try { return localStorage.getItem('gn.restBuzz') !== '0'; } catch { return true; } };
+const restLimit  = () => { try { return parseLimit(localStorage.getItem('gn.restLimit')); } catch { return parseLimit(null); } };
+
+/** "Resting 2:41" under the set someone is resting after. The ticker keeps it live. */
+function restLiveRow(since) {
+  const row = el('div', { class: 'rest-live', 'data-since': String(since), role: 'timer' },
+    el('span', { class: 'rest-live-label' }, 'Resting'),
+    el('span', { class: 'rest-live-time' }));
+  paintRestLive(row, Date.now());
+  return row;
+}
+
+function paintRestLive(row, now) {
+  const elapsed = Math.max(0, now - Number(row.dataset.since));
+  if (elapsed > LIVE_MAX_MS) { row.remove(); return; }
+  const limit = restLimit();
+  row.lastChild.textContent = formatRest(elapsed);
+  row.style.setProperty('--heat', heatColor(restHeat(elapsed, limit)));
+  row.classList.toggle('over', elapsed >= limit * 1000);
+}
+
+// One buzz per set, remembered across reloads so reopening the app inside the
+// buzz window does not buzz again.
+const buzzedSets = (() => { try { return JSON.parse(localStorage.getItem('gn.restBuzzed') || '[]'); } catch { return []; } })();
+
+/**
+ * Buzz when either person on the exercise screen passes the limit, on whatever
+ * screen is open — typing the other person's set is exactly when you would
+ * miss a colour change.
+ */
+function checkRestBuzz(now) {
+  if (!restBuzzOn() || !vibrateSupported() || !state.profiles.length) return;
+  const { left, right } = layoutSides({
+    profiles: state.profiles, owner: state.owner, rightId: localStorage.getItem('gn.rightSide'),
+  });
+  const today = S.todayKey();
+  const limit = restLimit();
+  for (const p of [left, right]) {
+    if (!p) continue;
+    const r = restingAfter(state.recent, { profileId: p.id, today, now });
+    if (!r || buzzedSets.includes(r.set.id) || !shouldBuzz(r.elapsed, limit)) continue;
+    // Not marked unless it fired: a hidden page can still buzz once it is back,
+    // inside the window.
+    if (buzzRest()) {
+      buzzedSets.push(r.set.id);
+      buzzedSets.splice(0, buzzedSets.length - 20);
+      try { localStorage.setItem('gn.restBuzzed', JSON.stringify(buzzedSets)); } catch {}
+    }
+  }
+}
 
 /**
  * Appends each set's row in logging order, numbering working sets from 1 (a
@@ -781,13 +905,21 @@ function viewLog(v) {
 
 /* ============================ exercise search ============================ */
 
+/** Settings → "Most-done exercises first in search". On by default. */
+const searchFreqOn = () => { try { return localStorage.getItem('gn.searchFreq') !== '0'; } catch { return true; } };
+
+// Days each exercise was trained in the last 2 weeks, both of you together —
+// search ranks the ones you actually do above the ones you never touch. Off:
+// name matches still come first, then muscle priority, then A-Z.
+const recentUse = () => searchFreqOn() ? recentFrequency(state.recent, { today: S.todayKey(), days: 14 }) : null;
+
 function viewSearch(v) {
   const input = el('input', { placeholder: 'Search — try "tricep" or "incline db"', autocomplete: 'off' });
   const results = el('div');
 
   const paint = () => {
     clear(results);
-    const hits = searchExercises(state.exercises, input.value);
+    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse() });
     if (!hits.length) {
       results.append(el('div', { class: 'empty' }, 'No match.'));
     }
@@ -917,6 +1049,10 @@ function sideColumn(profile, exerciseId, date, isMe, header) {
     appendSets(col, sets, (x, n) => columnSetRow(x, n, { onEdit: () => go('edit/' + x.id) }));
   }
 
+  // Counting up under the last set, while this is the last thing they did.
+  const live = liveRestOn() && restingAfter(state.recent, { profileId: profile.id, today: date, now: Date.now() });
+  if (live && live.set.exerciseId === exerciseId) col.append(restLiveRow(live.since));
+
   col.append(el('button', { class: 'side-add', onClick: () => go(`set/${exerciseId}/${profile.id}`) },
     '+ add set'));
 
@@ -979,14 +1115,29 @@ function viewExercise(v, exerciseId) {
     ));
   }
 
-  v.append(el('button', { class: 'btn block', style: 'margin-top:14px', onClick: () => go('search') },
-    'Another exercise'));
-  v.append(el('button', { class: 'btn block', style: 'margin-top:8px', onClick: () => go('log') }, 'Done'));
+  // Side by side rather than stacked: one row of height back for the chart.
+  v.append(el('div', { class: 'row', style: 'margin-top:14px' },
+    el('button', { class: 'btn grow', onClick: () => go('search') }, 'Another exercise'),
+    el('button', { class: 'btn grow', onClick: () => go('log') }, 'Done')
+  ));
+
+  // The chart right here, so progress is visible the moment an exercise is
+  // picked. The 📈 button above still opens the full page with its table.
+  if (inlineChartOn()) {
+    const people = mode === 'single' ? [left] : [left, right];
+    v.append(el('div', { class: 'row spread inline-chart-head' },
+      el('h3', { style: 'margin:0' }, 'Progress'),
+      el('button', { class: 'btn sm', onClick: () => go('progress/' + exerciseId) }, 'Details ›')));
+    appendProgressChart(v, ex, people, { inline: true });
+  }
 }
 
 /* ============================ progress ============================ */
 
 let progressSel = null;   // { exercise, key, date } — the tapped point
+
+/** Settings → "Show progress chart on exercise screen". On by default. */
+const inlineChartOn = () => { try { return localStorage.getItem('gn.inlineChart') !== '0'; } catch { return true; } };
 
 /** Settings → "Animate charts". On by default. */
 const chartAnimOn = () => { try { return localStorage.getItem('gn.chartAnim') !== '0'; } catch { return true; } };
@@ -1013,16 +1164,28 @@ function chartPool(exerciseId) {
  * Same two people as the exercise columns: left is you, right is whoever is
  * selected there. One line each on one plot, so they compare directly.
  */
-function viewProgress(v, exerciseId) {
-  const ex = exerciseById(exerciseId);
-  if (!ex) return go('log');
-
+/** You plus the selected right-hand person — the same two as the exercise columns. */
+function chartPeople() {
   const { mode, left, right } = layoutSides({
     profiles: state.profiles, owner: state.owner, rightId: localStorage.getItem('gn.rightSide'),
   });
-  if (mode === 'none') return go('settings');
-  const people = mode === 'single' ? [left] : [left, right];
+  if (mode === 'none') return null;
+  return mode === 'single' ? [left] : [left, right];
+}
 
+/**
+ * The metric toggle and chart card, shared by the Progress page and the
+ * exercise screen so the two can never drift apart.
+ *
+ * `inline` is the exercise-screen version. A tap opens the full Progress page
+ * on that day — the table and the day's sets live there. With no trend to draw
+ * it shows a one-line hint instead of tiles, since the columns above it already
+ * show that one session, and nothing at all for a brand-new exercise.
+ *
+ * @returns the buildProgress() result
+ */
+function appendProgressChart(v, ex, people, { inline = false } = {}) {
+  const exerciseId = ex.id;
   const P = buildProgress({
     exercise: ex,
     people,
@@ -1031,28 +1194,32 @@ function viewProgress(v, exerciseId) {
   });
   const { metric, metrics, series } = P;
 
-  // --- header ---
-  v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
-    el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
-    // Back to wherever it was opened from: the exercise screen or the library.
-    el('button', { class: 'btn sm', onClick: () => (prevHash ? history.back() : go('ex/' + exerciseId)) }, 'Back')
-  ));
-  v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' → ')));
-
-  if (metrics.length > 1) {
-    v.append(el('div', { style: 'margin-bottom:12px' },
-      segmented(metrics.map((k) => ({ key: k, label: CHART_METRICS[k].label })), metric, (k) => {
-        localStorage.setItem('gn.chartMetric', k);
-        progressSel = null;
-        render();
-      })));
+  if (inline && P.layout !== 'chart') {
+    if (P.layout === 'tiles') {
+      v.append(el('div', { class: 'tiny faint inline-chart-hint' },
+        '📈 A progress chart appears here after a second session.'));
+    }
+    return P;
   }
 
-  const card = el('div', { class: 'card chart-card' });
-  v.append(card);
+  // Top weight / Reps / Volume. Above the chart on the Progress page; below it
+  // on the exercise screen, where the sets above already push the chart down
+  // and the chart is what matters.
+  const picker = metrics.length > 1 && el('div', { class: inline ? 'metric-pick below' : 'metric-pick' },
+    segmented(metrics.map((k) => ({ key: k, label: CHART_METRICS[k].label })), metric, (k) => {
+      localStorage.setItem('gn.chartMetric', k);
+      progressSel = null;
+      render();
+    }));
 
-  // The tapped point, if it belongs to this exercise.
-  const sel = progressSel && progressSel.exercise === exerciseId ? progressSel : null;
+  const card = el('div', { class: 'card chart-card' });
+  if (picker && !inline) v.append(picker);
+  v.append(card);
+  if (picker && inline) v.append(picker);
+
+  // The tapped point, if it belongs to this exercise. Inline never holds one:
+  // a tap there opens the full page instead.
+  const sel = !inline && progressSel && progressSel.exercise === exerciseId ? progressSel : null;
 
   // --- legend: shape + name in text colour; identity is never colour alone ---
   // Tiles already name each person beside the same swatch, so only the chart
@@ -1075,8 +1242,9 @@ function viewProgress(v, exerciseId) {
     card.append(plot);
     // A rebuild during the entrance (a set syncing in, a quick tap) passes how
     // far along it is, so the new elements resume mid-animation rather than
-    // snapping to the end or restarting.
-    const key = exerciseId + '|' + metric;
+    // snapping to the end or restarting. The inline and full-page charts are
+    // separate entrances, so the key says which.
+    const key = (inline ? 'inline|' : 'page|') + exerciseId + '|' + metric;
     if (key !== animatedKey) { animatedKey = key; animatedAt = Date.now(); }
     const elapsed = Date.now() - animatedAt;
     const animate = chartAnimOn() && elapsed < CHART_ANIM_MS;
@@ -1084,15 +1252,37 @@ function viewProgress(v, exerciseId) {
       series, metric, selected: sel, animate, elapsed,
       axisTitle: P.axisTitle,
       integerAxis: P.integerAxis,
-      onSelect: (key, p) => {
-        progressSel = sel && sel.key === key && sel.date === p.date ? null : { exercise: exerciseId, key, date: p.date };
-        render();
-      },
+      onSelect: inline
+        ? (k, p) => { progressSel = { exercise: exerciseId, key: k, date: p.date }; go('progress/' + exerciseId); }
+        : (k, p) => {
+            progressSel = sel && sel.key === k && sel.date === p.date ? null : { exercise: exerciseId, key: k, date: p.date };
+            render();
+          },
     });
   }
 
   // --- notes on what the numbers mean ---
   if (P.notes.length) card.append(el('div', { class: 'chart-notes' }, P.notes.join(' · ')));
+  return P;
+}
+
+function viewProgress(v, exerciseId) {
+  const ex = exerciseById(exerciseId);
+  if (!ex) return go('log');
+  const people = chartPeople();
+  if (!people) return go('settings');
+
+  // --- header ---
+  v.append(el('div', { class: 'row spread', style: 'margin-bottom:2px' },
+    el('strong', { class: 'grow', style: 'font-size:1.05rem' }, ex.name),
+    // Back to wherever it was opened from: the exercise screen or the library.
+    el('button', { class: 'btn sm', onClick: () => (prevHash ? history.back() : go('ex/' + exerciseId)) }, 'Back')
+  ));
+  v.append(el('div', { class: 'tiny faint', style: 'margin-bottom:12px' }, (ex.muscles || []).join(' → ')));
+
+  const P = appendProgressChart(v, ex, people);
+  const { metric, series } = P;
+  const sel = progressSel && progressSel.exercise === exerciseId ? progressSel : null;
 
   // --- the tapped day, exactly as logged ---
   const hit = sel && series.find((s) => s.key === sel.key)?.points.find((p) => p.date === sel.date);
@@ -1553,7 +1743,7 @@ function viewExercisePool(v) {
 
   const paint = () => {
     clear(list);
-    const hits = searchExercises(state.exercises, input.value);
+    const hits = searchExercises(state.exercises, input.value, { frequency: recentUse() });
     if (!hits.length) {
       list.append(el('div', { class: 'empty tiny' }, 'No match.'));
       return;

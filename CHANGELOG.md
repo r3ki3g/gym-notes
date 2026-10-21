@@ -11,6 +11,156 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.20.0] — 10/21/26
+
+### Added
+- **Live rest timer.** On the exercise screen, under each person's last set, a
+  big `Resting 2:41` counts up every second. It starts when the set is logged,
+  which is when the set ended, so it is real rest.
+  - It goes grey to gold to red from half the limit to the limit, with a soft
+    heartbeat pulse that beats harder once the limit has passed.
+  - It shows only while that set is the person's latest of the day on any
+    exercise, and for at most 30 minutes.
+  - It survives a reload or a locked phone, because it counts from the set's
+    logged time.
+- **One buzz when the limit passes**, for you or your partner, on whatever screen
+  is open. It fires only once per set, and only in the minute after the limit, so
+  opening the app late shows red without buzzing. Browsers only vibrate while the
+  app is open and the screen is on.
+- **Settings → Rest timer:** Live rest timer (on), Rest limit (5:00, from 1 to 10
+  minutes in 30-second steps), and Vibrate at limit (on). Spec:
+  `docs/rest-timer-spec.md`.
+
+### Changed
+- **Loading screen** scaled back again, to a small step up from the original:
+  the wordmark is about 24px against the original 20px. 1.19.0 still read as too
+  big on a laptop.
+
+---
+
+## [1.19.0] — 10/21/26
+
+### Added
+- **Settings → Display → "Most-done exercises first in search"**, on by default.
+  Off: results go A–Z within each match level, and an empty box lists A–Z.
+  Name matches come first either way.
+
+### Changed
+- **Loading screen scaled back:** the wordmark is now about 42% of a phone's width.
+  The 60% from 1.18.0 was too big. The PRO plate, bar and text shrank to match.
+
+---
+
+## [1.18.0] — 10/21/26
+
+### Changed
+- **Search ranks by how well the name matches, then by what you actually do.**
+  An exercise whose name has the word you typed comes first (exact word, then
+  start of a word, then partial or alias), and muscle-only matches come after.
+  Typing "chest" now lists "Chest supported row" above "Flat bench press". This
+  reverses the old rule, where a primary-muscle match beat a name match.
+- Within each of those groups, the exercises trained on more days in the last 2
+  weeks come first, counting both of you. Days, not sets: five sets in one
+  session count once. Applies to the log picker and the Exercises tab.
+- **Empty search box: most-used exercises first**, then A–Z, instead of plain A–Z.
+- **The Top weight / Reps / Volume picker sits under the chart on the exercise
+  screen**, so the chart starts higher when that day's sets take up the space
+  above it. The Progress page keeps the picker on top.
+- **Bigger loading screen**, so it works as the app's advert: the BroSplit
+  wordmark is now about 60% of a phone's width (it was about a third), and the PRO
+  plate, the loading bar and the status text are bigger to match. It scales with
+  the screen and is capped on a laptop.
+
+---
+
+## [1.17.4] — 10/21/26
+
+### Changed
+- **Chart animation reverted to the 1.16.0 entrance**: one wide purple-to-gold
+  glide sweeping slowly behind the chart over 2.6s, the line drawing in, and the
+  dots falling into place on their original timing. None of the 1.17.1–1.17.3
+  experiments (a double pass, two bands at once, staged bands, two fast narrow
+  bands) looked as good. Verified live against the 1.16.0 values: one 2.6s glide
+  and no second one, dots dropping from 113 to 848ms, labels at 0.7s, and nothing
+  left on screen afterwards.
+- Everything else from 1.17.x stays: the chart on the exercise screen, the
+  side-by-side buttons, and no replay after logging or editing a set.
+
+---
+
+## [1.17.3] — 10/21/26
+
+### Changed
+- **Two quick glides, one per stage**: the first sweeps across with the line,
+  the second as the dots fall. Same purple-to-gold band. About half a second
+  each: 61–524ms and 676–1,187ms, measured in the real app.
+- Dots now fall in their own stage, starting at 550ms once the line is under
+  way, so the second glide has a moment of its own.
+
+### Fixed
+- **A glide parked at the right edge.** An intermediate version sized each strip
+  to the plotted points only, so its end position was still inside the card,
+  over the name labels, and the glide sat there. Strips now span the card and
+  stop exactly at its edges. Measured: no band visible anywhere after the
+  entrance.
+- **Glides were too slow**, from being locked to the line's 900ms pace. Then,
+  briefly, too fast: a -100% → +100% run with easing showed each band for only
+  ~150–200ms, a flicker. They now travel edge to edge at a steady pace and are
+  on screen the whole time they run.
+
+---
+
+## [1.17.2] — 10/21/26
+
+### Changed
+- **The glide is two bands crossing together, not one band twice.** 1.17.1 ran a
+  single band twice with easing. Each pass slowed to a stop at the edge before
+  the next crept in, so the user saw a glide, a silent gap, then another glide.
+  It's now one steady 2.6s sweep carrying two bands, the same purple-to-gold,
+  one following the other. Measured in the real app: **no silent moment** during
+  the sweep, and both bands on screen for 57.9% of it, the whole middle stretch.
+
+---
+
+## [1.17.1] — 10/21/26
+
+### Changed
+- **The chart glide now sweeps twice**, 1.3s each, inside the same 2.6s. Each
+  pass feels quicker while the entrance lasts as long as before. Colours are
+  unchanged. Verified by sampling the glide's live position every 150ms in the
+  real app: two complete left-to-right crossings, ending off the plot.
+
+---
+
+## [1.17.0] — 10/21/26
+
+### Added
+- **The progress chart on the exercise screen**, under the sets, with the
+  entrance animation. Pick an exercise and its progress is right there. Settings
+  → Display → *Show progress chart on exercise screen*, **on by default**.
+  - **Tap a point** to open the full Progress page on that day, with its sets and
+    the table. *Details ›* opens it too, and the 📈 button stays at the top.
+  - With one session it shows a one-line hint instead of tiles, since the columns
+    just above already show that session. A brand-new exercise shows nothing.
+  - **Plays its animation when you open an exercise, not when you come back to it
+    after logging or editing a set.** That return happens after every set, so a
+    2.6s replay would run twenty times a workout. The first version still
+    replayed: it cleared the key on the way *into* the set form. Caught in
+    testing, and fixed.
+  - The chart code is shared with the Progress page (`appendProgressChart`), so
+    the two can't drift apart.
+
+### Changed
+- **"Another exercise" and "Done" sit side by side** instead of stacked.
+
+### Verified
+- Real app, read-only. Picked from search: the chart appears below the
+  side-by-side buttons and animates. Back from the set form: no replay. Tapping a
+  point opened Progress on that day. One-session exercise: the hint. Setting off:
+  no chart. No console errors; 446 sets before and after.
+
+---
+
 ## [1.16.0] — 10/12/26
 
 ### Added

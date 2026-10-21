@@ -351,7 +351,9 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 }
 #splash.gone{opacity:0;visibility:hidden;pointer-events:none}
 
-.splash-name{font-size:1.25rem;font-weight:800;
+/* A notch above the original 1.25rem, nothing more: 1.18.0 (up to 3rem) and
+   1.19.0 (up to 2rem) both read as too big. */
+.splash-name{font-size:clamp(1.35rem,6vw,1.5rem);font-weight:800;line-height:1.1;
   letter-spacing:.14em;text-transform:uppercase;
   background:linear-gradient(100deg,
     var(--accent) 0%, #e0a3ff 28%,
@@ -368,11 +370,11 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 
 /* PRO plate with a glint that crosses it once per cycle */
 .splash-pro{
-  position:relative;overflow:hidden;margin-top:11px;
-  font-size:.6rem;font-weight:900;letter-spacing:.2em;line-height:1;
-  color:#2b1f02;border-radius:5px;padding:5px 11px;
+  position:relative;overflow:hidden;margin-top:12px;
+  font-size:.68rem;font-weight:900;letter-spacing:.22em;line-height:1;
+  color:#2b1f02;border-radius:6px;padding:6px 11px 6px 13px;   /* letter-spacing trails: less on the right */
   background:linear-gradient(135deg,#a67c0a,var(--gold) 38%,#ffeaa3 50%,var(--gold) 62%,#a67c0a);
-  box-shadow:0 2px 12px rgba(240,180,41,.32);
+  box-shadow:0 2px 14px rgba(240,180,41,.34);
 }
 .splash-pro::after{
   content:'';position:absolute;inset:0;
@@ -386,7 +388,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 }
 /* indeterminate progress — a gold highlight crossing a hairline track */
 .splash-progress{
-  width:148px;height:2px;margin-top:22px;border-radius:2px;
+  width:160px;height:2px;margin-top:24px;border-radius:2px;
   background:var(--line);overflow:hidden;
 }
 .splash-progress::after{
@@ -400,7 +402,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 }
 
 .splash-stage{
-  margin-top:8px;font-size:.74rem;color:var(--faint);
+  margin-top:8px;font-size:.76rem;color:var(--faint);
   letter-spacing:.05em;min-height:1.1em;
 }
 .splash-stage.failed{color:var(--bad)}
@@ -415,7 +417,7 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 .splash-fix[disabled]{opacity:.6}
 .splash-version{
   position:absolute;bottom:calc(26px + env(safe-area-inset-bottom));
-  font-size:.66rem;color:var(--faint);letter-spacing:.1em;opacity:.65;
+  font-size:.7rem;color:var(--faint);letter-spacing:.1em;opacity:.65;
 }
 
 @media (prefers-reduced-motion:reduce){
@@ -427,6 +429,10 @@ dialog::backdrop{background:rgba(0,0,0,.65)}
 
 /* ---------- progress chart ---------- */
 .chart-card{padding:12px 10px 10px}
+/* metric picker: above the chart on the Progress page, below it inline (the card
+   already leaves 10px under itself) */
+.metric-pick{margin-bottom:12px}
+.metric-pick.below{margin-bottom:4px}
 .plot{width:100%;overflow:hidden;position:relative;isolation:isolate}
 .chart{display:block;font-family:inherit}
 .chart .grid line{stroke:var(--line);stroke-width:1}
@@ -515,6 +521,35 @@ body.is-editing{
 .rest-gap::after{content:"";flex:1;border-top:1px dashed var(--line);margin-left:2px}
 .rest-gap-icon{font-size:.72rem;opacity:.75}
 
+/* live rest: counts up under the last set while resting. Bigger than the Rest:
+   rows, and shades grey -> gold -> red as it nears the limit (--heat, set by the
+   1s ticker). The beat is a lub-dub once a second, harder once past the limit. */
+.rest-live{
+  --heat:var(--faint);
+  display:flex;align-items:baseline;justify-content:center;gap:7px;
+  margin-top:6px;padding:7px 0 3px;border-top:1px dashed var(--line);
+  color:var(--heat);font-variant-numeric:tabular-nums;transition:color .8s linear;
+}
+.rest-live-label{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.85}
+.rest-live-time{
+  display:inline-block;font-size:1.25rem;font-weight:800;line-height:1.1;
+  animation:heartbeat 1s ease-out infinite;
+}
+.rest-live.over .rest-live-time{animation-name:heartbeat-hard;text-shadow:0 0 14px rgba(248,113,113,.5)}
+@keyframes heartbeat{
+  0%,36%,100%{transform:scale(1)}
+  10%{transform:scale(1.07)}
+  18%{transform:scale(1)}
+  26%{transform:scale(1.04)}
+}
+@keyframes heartbeat-hard{
+  0%,36%,100%{transform:scale(1)}
+  10%{transform:scale(1.16)}
+  18%{transform:scale(1)}
+  26%{transform:scale(1.09)}
+}
+.limit-val{min-width:44px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+
 /* quick-add notes: one sideways-scrolling row, so they cost a single line of
    height however many there are. Bleeds to the card edges so the scroll does. */
 .chips{
@@ -538,7 +573,11 @@ body.is-editing{
 .plot.animate::before{
   /* behind the chart (z-index -1 inside .plot's own stacking context), so it can
      be bright without washing out the lines and dots it passes. Slow on
-     purpose: at 1.1s and 15% the first version was barely noticed. */
+     purpose: at 1.1s and 15% the first version was barely noticed.
+
+     Restored as-is after four experiments (a double pass, two bands at once,
+     staged bands, two fast narrow bands); none read as well as this one wide,
+     slow sweep. */
   content:"";position:absolute;inset:0;pointer-events:none;z-index:-1;
   background:linear-gradient(100deg,
     transparent 12%,
@@ -582,4 +621,10 @@ body.is-editing{
   .chart.animate .suspect-ring{animation:none}
   .chart.animate .end-name{animation:none}
   .chart.animate .end-value{animation:none}
+  .rest-live-time{animation:none}
 }
+
+/* the progress chart on the exercise screen */
+.inline-chart-head{margin:22px 0 10px}
+.inline-chart-head h3{font-size:.95rem}
+.inline-chart-hint{text-align:center;margin:18px 0 6px}

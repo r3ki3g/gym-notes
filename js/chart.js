@@ -72,6 +72,7 @@ export function drawChart(container, { series, metric, axisTitle, integerAxis = 
   // One distinct day across everyone: centre it rather than pinning to the edge.
   const x = (iso) => M.left + PAD + (dates.length === 1 ? (iw - 2 * PAD) / 2 : (dayIndex(iso, origin) / span) * (iw - 2 * PAD));
 
+
   const ax = niceAxis(all.map((p) => p.value), { integer: integerAxis });
   const y = (v) => M.top + ih - ((v - ax.min) / (ax.max - ax.min || 1)) * ih;
 

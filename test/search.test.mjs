@@ -1,4 +1,4 @@
-import { searchExercises } from '../js/search.js';
+import { searchExercises, recentFrequency } from '../js/search.js';
 import { SEED_EXERCISES } from '../js/seed.js';
 
 let pass = 0, fail = 0;
@@ -81,6 +81,58 @@ ok('typed "ham" still prefix-matches Hammer',  has('ham', 'e'));
 // muscle matching is word-prefix, or "tri" hits the middle of "hamstrings"
 ok('tricep does NOT surface Leg curl',  !has('tricep', 'f'));
 ok('tri does NOT surface Leg curl',     !has('tri', 'f'));
+
+// Ranking (10/21/26): a NAME match beats a muscle-only match, then the
+// exercises trained on more days in the last 2 weeks come first.
+const POOL = [
+  { id: 'bench',  name: 'Flat bench press',         muscles: ['chest', 'triceps'] },
+  { id: 'fly',    name: 'Pec fly machine',          muscles: ['chest'] },
+  { id: 'csrow',  name: 'Chest supported row',      muscles: ['upper back', 'lats'] },
+  { id: 'cdip',   name: 'Chest dips',               muscles: ['chest', 'triceps'] },
+  { id: 'latpd',  name: 'Lat pull down',            muscles: ['lats'] },
+  { id: 'latrse', name: 'Lateral raise',            muscles: ['side delts'] },
+  { id: 'row',    name: 'Seated cable row',         muscles: ['lats', 'upper back'] },
+];
+const rank = (q, freq) => searchExercises(POOL, q, { frequency: freq ? new Map(Object.entries(freq)) : null }).map((e) => e.id);
+const before = (list, a, b) => list.indexOf(a) >= 0 && list.indexOf(a) < list.indexOf(b);
+
+console.log('\nname matches come before muscle-only matches\n');
+const chest = rank('chest');
+ok('"chest": Chest supported row above Flat bench press', before(chest, 'csrow', 'bench'), chest.join(','));
+ok('"chest": Chest dips above Pec fly machine',           before(chest, 'cdip', 'fly'), chest.join(','));
+ok('"chest": muscle-only matches still listed',           chest.includes('bench') && chest.includes('fly'));
+const lat = rank('lat');
+ok('"lat": exact word "Lat" above prefix "Lateral"',      before(lat, 'latpd', 'latrse'), lat.join(','));
+ok('"lat": prefix "Lateral" above muscle-only rows',      before(lat, 'latrse', 'row'), lat.join(','));
+
+console.log('\nrecent use breaks ties, never crosses a match level\n');
+const busy = rank('chest', { bench: 9, fly: 2 });
+ok('heavy use does NOT lift a muscle match over a name match', before(busy, 'cdip', 'bench') && before(busy, 'csrow', 'bench'), busy.join(','));
+ok('within muscle-only matches, more-used first',             before(busy, 'bench', 'fly'), busy.join(','));
+const dips = rank('chest', { cdip: 3 });
+ok('within name matches, more-used first',                    before(dips, 'cdip', 'csrow'), dips.join(','));
+
+console.log('\nempty query: most-used first, then A-Z\n');
+const empty = rank('', { row: 5, fly: 2 });
+ok('most-used on top',        empty[0] === 'row' && empty[1] === 'fly', empty.join(','));
+ok('rest A-Z after them',     empty[2] === 'cdip' && empty[3] === 'csrow', empty.join(','));
+ok('no frequency -> plain A-Z', rank('')[0] === 'cdip');
+
+console.log('\nrecentFrequency counts days, not sets\n');
+const SETS = [
+  { exerciseId: 'x', date: '2026-10-21' }, { exerciseId: 'x', date: '2026-10-21' }, { exerciseId: 'x', date: '2026-10-21' },
+  { exerciseId: 'x', date: '2026-10-08' },                       // 13 days back: day 14 of the window
+  { exerciseId: 'x', date: '2026-10-07' },                       // 14 days back: outside
+  { exerciseId: 'y', date: '2026-10-15', profileId: 'p1' },
+  { exerciseId: 'y', date: '2026-10-15', profileId: 'p2' },      // same day, other person: still one day
+  { exerciseId: 'y', date: '2026-10-16', profileId: 'p2' },
+  { exerciseId: 'z', date: '2026-10-22' },                       // future (bad clock): ignored
+];
+const f = recentFrequency(SETS, { today: '2026-10-21' });
+ok('three sets on one day = 1 day, window is 14 days incl. today', f.get('x') === 2, String(f.get('x')));
+ok('both people together, distinct days',                         f.get('y') === 2, String(f.get('y')));
+ok('future dates ignored',                                        !f.has('z'));
+ok('crosses a month boundary', recentFrequency([{ exerciseId: 'm', date: '2026-09-30' }], { today: '2026-10-05' }).get('m') === 1);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

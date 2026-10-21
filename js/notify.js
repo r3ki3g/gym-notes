@@ -43,6 +43,17 @@ export function buzz() {
   try { return navigator.vibrate([60, 40, 60]); } catch { return false; }
 }
 
+/**
+ * The rest-limit buzz: longer than the toast's, so the two never feel alike.
+ * Its own setting (Settings → Rest timer), not the toast's Vibrate switch.
+ * Foreground only, like buzz().
+ */
+export function buzzRest() {
+  if (!vibrateSupported()) return false;
+  if (typeof document !== 'undefined' && document.hidden) return false;
+  try { return navigator.vibrate([260, 120, 260]); } catch { return false; }
+}
+
 /** One short pulse, for confirming the toggle in settings. */
 export function buzzTest() {
   if (!vibrateSupported()) return false;
