@@ -4,6 +4,7 @@ import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
 import { allPRs, newPRs } from './pr.js';
+import { suggestNext } from './nextset.js';
 import { gymDays, grid, streaks, parseTarget } from './streak.js';
 import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
 import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
@@ -211,7 +212,27 @@ const splashFailsafe = setTimeout(() => {
 
 /* ============================ render ============================ */
 
+/**
+ * Rebuilding the screen you are already on keeps your place. Every re-render
+ * replaces the whole view, and on a phone a tap that triggers one (the chart's
+ * Top weight / Reps / Volume picker under the chart) dropped the scroll to the
+ * very top, past a long list of last-day sets. A set arriving live does the
+ * same rebuild. Going to another screen is unchanged.
+ */
+let renderedHash = null;
 function render() {
+  const same = renderedHash === location.hash;
+  const y = window.scrollY;
+  renderedHash = location.hash;
+  renderScreen();
+  if (same && y) {
+    window.scrollTo(0, y);
+    // and once more after the tap has finished: the jump can land after it
+    requestAnimationFrame(() => { if (renderedHash === location.hash && Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y); });
+  }
+}
+
+function renderScreen() {
   paintTopbar();
   formDirty = false;
   // Gold for the whole page while editing, so nobody mistakes it for adding.
@@ -767,6 +788,12 @@ function viewSettings(v) {
     streakOn,
     (on) => { try { localStorage.setItem('gn.streakOn', on ? '1' : '0'); } catch {} }
   ));
+  v.append(toggleRow(
+    'Smart next set',
+    'Starts where you started last time, climbs back up, repeats after a hard set; reps show as a target. Off: copies your last set',
+    smartOn,
+    (on) => { try { localStorage.setItem('gn.smartNext', on ? '1' : '0'); } catch {} }
+  ));
   const targetVal = el('span', { class: 'limit-val' }, `${weeklyTarget()} days`);
   const nudgeTarget = (dir) => {
     const next = parseTarget(weeklyTarget() + dir);
@@ -930,9 +957,9 @@ const prs = { map: new Map(), recent: null, sets: null, flash: new Map() };
 
 function prMap() {
   if (prs.recent === state.recent && prs.sets === state.sets) return prs.map;
-  const byId = new Map();
-  for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
-  const next = allPRs([...byId.values()]);
+  const held = heldSets();
+  const byId = new Map(held.map((x) => [x.id, x]));
+  const next = allPRs(held);
   const fresh = newPRs(prs.map, next, byId, Date.now());
   prs.map = next; prs.recent = state.recent; prs.sets = state.sets;
   if (fresh.length && prOn()) celebrate(fresh.map((id) => byId.get(id)));
@@ -950,6 +977,16 @@ function celebrate(sets) {
 }
 
 const isPR = (x) => prOn() && prMap().has(x.id);
+
+/** Every set this phone holds: the shared 90-day window plus the active profile's full history. */
+function heldSets() {
+  const byId = new Map();
+  for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
+  return [...byId.values()];
+}
+
+/** Settings → Pro features → Smart next set. On by default. */
+const smartOn = () => { try { return localStorage.getItem('gn.smartNext') !== '0'; } catch { return true; } };
 
 /** Class and timing for a row whose set just became a PR, so a re-render mid-flash carries on. */
 function prFlashAttrs(x) {
@@ -1453,7 +1490,8 @@ const chartAnimOn = () => { try { return localStorage.getItem('gn.chartAnim') !=
 // when a chart first appears or its metric changes. Cleared on leaving, so
 // coming back plays it again.
 let animatedKey = null;
-let animatedAt = 0;
+let animatedAt = 0;          // 0 while the entrance waits to be seen (inline chart below the fold)
+let chartWatch = null;       // the IntersectionObserver for that wait
 const CHART_ANIM_MS = 2700;   // the 2.6s glide is the longest step; a rebuild inside it resumes
 
 /**
@@ -1551,9 +1589,25 @@ function appendProgressChart(v, ex, people, { inline = false } = {}) {
     // snapping to the end or restarting. The inline and full-page charts are
     // separate entrances, so the key says which.
     const key = (inline ? 'inline|' : 'page|') + exerciseId + '|' + metric;
-    if (key !== animatedKey) { animatedKey = key; animatedAt = Date.now(); }
-    const elapsed = Date.now() - animatedAt;
+    // The exercise screen's chart often sits below a long list of last time's
+    // sets, so its entrance played out of sight. Inline, it now waits, paused
+    // on its first frame, until 40% of it is on screen, then plays once. A
+    // rebuild while it waits keeps waiting; one mid-entrance carries on.
+    if (key !== animatedKey) { animatedKey = key; animatedAt = inline && chartAnimOn() ? 0 : Date.now(); }
+    const waiting = animatedAt === 0;
+    const elapsed = waiting ? 0 : Date.now() - animatedAt;
     const animate = chartAnimOn() && elapsed < CHART_ANIM_MS;
+    chartWatch?.disconnect(); chartWatch = null;
+    if (waiting) {
+      plot.classList.add('paused');
+      chartWatch = new IntersectionObserver((entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        chartWatch?.disconnect(); chartWatch = null;
+        if (animatedKey === key && animatedAt === 0) animatedAt = Date.now();
+        plot.classList.remove('paused');
+      }, { threshold: 0.4 });
+      chartWatch.observe(plot);
+    }
     drawChart(plot, {
       series, metric, selected: sel, animate, elapsed,
       axisTitle: P.axisTitle,
@@ -1677,11 +1731,20 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
     ? () => (prevHash ? history.back() : go('log'))
     : () => go('ex/' + exerciseId);
 
-  // Carry the last set's load forward — you almost always repeat or nudge it.
-  // Not when editing: the set already has its numbers.
+  // Smart next set (js/nextset.js): weight from where this person started last
+  // time and the ladder they climbed; reps left empty with the target as a
+  // hint, because the log must say what happened, not what was planned.
+  // Off, or with nothing to go on: carry the last set forward as before.
+  // Never when editing: the set already has its numbers.
   const todays = setsFor(p.id, exerciseId, today);
-  const prev = editing ? null : todays[todays.length - 1] || lastTime(exerciseId, today, p.id)?.sets?.slice(-1)[0];
-  if (prev) {
+  const smart = !editing && smartOn() ? suggestNext({ sets: heldSets(), profileId: p.id, exerciseId, today }) : null;
+  const prev = editing || smart?.primary ? null : todays[todays.length - 1] || lastTime(exerciseId, today, p.id)?.sets?.slice(-1)[0];
+  if (smart?.primary) {
+    const x = smart.primary;
+    draft.weight = x.weight; draft.unit = x.unit;
+    draft.perSide = x.perSide; draft.unilateral = x.unilateral;
+    draft.warmup = x.warmup; draft.reps = null;
+  } else if (prev) {
     draft.weight = prev.weight; draft.unit = prev.unit;
     draft.perSide = prev.perSide; draft.unilateral = prev.unilateral;
     draft.reps = prev.reps; draft.seconds = prev.seconds || 0;
@@ -1739,7 +1802,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   const effort = timed
     ? stepper({ value: draft.seconds, step: TIME_STEP, min: 0, decimals: 0,
                 onChange: (val) => { draft.seconds = val; } })
-    : stepper({ value: draft.reps, step: 1, min: 0, decimals: 0,
+    : stepper({ value: draft.reps, step: 1, min: 0, decimals: 0, hint: smart?.primary?.reps ?? null,
                 onChange: (val) => { draft.reps = val; } });
 
   // Live readout, so 90 reads as 1:30 without waiting for the set to save.
@@ -1780,6 +1843,36 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
 
   form.append(field(timed ? 'Hold time (seconds)' : 'Reps', effort.node));
   if (clock) form.append(clock);
+
+  // The suggestion's reason, and its two options as tap-to-fill chips.
+  if (smart) {
+    const box = el('div', { class: 'suggest' });
+    const basis = smart.sessions ? ` · based on ${smart.sessions.toLocaleString('en-US')} session${smart.sessions === 1 ? '' : 's'}` : '';
+    box.append(el('div', { class: 'suggest-why' }, smart.reason, el('span', { class: 'faint' }, basis)));
+    const chips = el('div', { class: 'suggest-chips' });
+    const apply = (x, chip) => {
+      draft.unit = x.unit; weight.setStep(stepFor(x.unit)); paintUnits();
+      draft.weight = x.weight; weight.set(x.weight);
+      draft.reps = x.reps; effort.set(x.reps);
+      draft.perSide = x.perSide; draft.unilateral = x.unilateral; draft.warmup = x.warmup;
+      // the toggles below show the draft; keep them in step
+      for (const b of form.querySelectorAll('button')) {
+        const key = { 'kg/side': 'perSide', 'Each side': 'unilateral', 'Warm-up': 'warmup' }[b.textContent];
+        if (key) b.classList.toggle('primary', !!draft[key]);
+      }
+      for (const c of chips.children) c.classList.toggle('on', c === chip);
+    };
+    const chip = (x, label) => {
+      const c = el('button', { type: 'button', class: 'chip-sug', onClick: () => apply(x, c) },
+        el('small', {}, label),
+        el('strong', {}, `${formatLoad(x.weight, x.unit, x.perSide)} × ${x.reps}`));
+      return c;
+    };
+    if (smart.primary) chips.append(chip(smart.primary, smart.primary.warmup ? 'Warm-up' : 'Suggested'));
+    if (smart.alt) chips.append(chip(smart.alt, smart.alt.label));
+    if (chips.children.length) box.append(chips);
+    form.append(box);
+  }
 
   /* ---------------- the rest of the set ----------------
      These were briefly hidden behind a "More options" toggle, on the assumption
@@ -1918,7 +2011,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   if (editing) {
     v.append(busyButton('Save changes', 'Saving…', 'btn gold block', async () => {
       const { e, fields } = formValues();
-      if (e <= 0) return toast(timed ? 'Need a hold time' : 'Need at least one rep');
+      if (e <= 0) return toast(timed ? 'Need a hold time' : 'Enter the reps you did');
 
       // editPatch keeps only the editable fields, so when the set was logged,
       // who logged it and on which phone all survive untouched.
@@ -1942,7 +2035,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
 
   v.append(busyButton('Save set', 'Adding…', 'btn primary block', async () => {
     const { e, fields } = formValues();
-    if (e <= 0) return toast(timed ? 'Need a hold time' : 'Need at least one rep');
+    if (e <= 0) return toast(timed ? 'Need a hold time' : 'Enter the reps you did');
 
     // No confirm here: the target came from the URL and is named at the top of
     // this form, so there is no silent global selection left to get wrong.
@@ -2070,9 +2163,7 @@ function viewHistory(v) {
  * below; the partner's are for comparison.
  */
 function streakCard(p) {
-  const byId = new Map();
-  for (const x of [...state.recent, ...state.sets]) byId.set(x.id, x);
-  const all = [...byId.values()];
+  const all = heldSets();
   const today = S.todayKey();
   const target = weeklyTarget();
   const people = [p, ...(chartPeople() || []).filter((o) => o && o.id !== p.id)].slice(0, 2);

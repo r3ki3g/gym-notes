@@ -110,12 +110,18 @@ export function busyButton(label, busyLabel, cls, fn) {
  * Returns { node, get, set, setStep } so the caller can retune the step when the
  * unit changes without rebuilding anything.
  */
-export function stepper({ value = 0, step = 1, min = 0, max = Infinity, decimals = 1, onChange } = {}) {
+/**
+ * `hint`: a target shown while the field is empty ("aim 12"), for numbers that
+ * must record what happened rather than what was planned. The first − or + tap
+ * fills the target itself; after that they nudge as usual.
+ */
+export function stepper({ value = 0, step = 1, min = 0, max = Infinity, decimals = 1, onChange, hint = null } = {}) {
   let step_ = step;
 
   const input = el('input', {
     type: 'number', inputmode: 'decimal', class: 'step-value',
     value: value || value === 0 ? String(value) : '',
+    placeholder: hint != null ? `aim ${hint}` : null,
   });
 
   const read  = () => { const n = parseFloat(input.value); return isNaN(n) ? 0 : n; };
@@ -136,6 +142,7 @@ export function stepper({ value = 0, step = 1, min = 0, max = Infinity, decimals
 
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      if (hint != null && input.value.trim() === '') { write(hint); return; }
       write(read() + dir * step_);
       hold = setTimeout(() => {
         let ticks = 0;

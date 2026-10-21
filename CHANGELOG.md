@@ -11,6 +11,90 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.30.0] — 10/21/26
+
+### Changed
+- **The exercise screen's chart plays its entrance when you scroll to it.**
+  With a long list of last time's sets, the chart sits below the fold, and its
+  entrance used to play out of sight. Now it waits, frozen on its first frame,
+  until 40% of it is on screen. Then it plays once per visit; scrolling away
+  and back doesn't replay it. A chart that's already visible plays straight
+  away, as before. The Progress page is unchanged, and so is "Animate charts"
+  off.
+
+Verified in headless Chrome on 10/19's incline press with a 640px-tall screen:
+- 3.5s after opening, below the fold: paused, 0 of 12 dots, line undrawn.
+- 0.25s after scrolling to it: playing.
+- 3s later: all 12 dots in, the line drawn.
+- Scrolled away and back: no replay.
+- Switching metric on screen: plays at once.
+- A tall screen: plays on open.
+- Animate charts off: static.
+
+---
+
+## [1.29.1] — 10/21/26
+
+### Fixed
+- **Tapping Top weight / Reps / Volume under the chart threw the page back to
+  the top**, past all of last time's sets, so the chart you were looking at
+  went off screen. Every tap rebuilds the screen, and on a phone, removing the
+  button you just touched dropped the scroll to 0. A rebuild of the screen
+  you're already on now keeps your place; going to another screen is
+  unchanged.
+  - Reproduced in headless Chrome with a real touch tap, not a scripted click:
+    the scroll went from 688 to 0. With the fix it stays at 688, chart still on
+    screen.
+  - The same keeps your place when a set arrives live while you're scrolled
+    down.
+
+---
+
+## [1.29.0] — 10/21/26
+
+### Added: Smart next set (Settings → Pro features, on by default)
+Spec: `docs/next-set-suggestion-spec.md`. Research and backtest:
+`docs/research/next-set/`.
+- **The add-set form suggests the next set** from how this person actually
+  trains:
+  - The first set starts where they **started** last time, not where they
+    ended. If they warmed up last time, that warm-up comes first.
+  - Later sets climb back up last session's ladder.
+  - After a hard set (failure, help, partials, a drop), they repeat it.
+  - At the top, it's the same again, with one step up as the option.
+- **The weight is pre-filled; the reps are a target.** The reps field stays
+  empty showing "aim 12", so the log records what happened. The first − or +
+  tap fills the target.
+- **A one-line reason**, for example "Started at 50 kg last time, so starting
+  there again · based on 7 sessions".
+- **Two tap-to-fill chips**, the suggestion and the alternative. Tapping one
+  sets weight, unit, reps and the warm-up toggle.
+- **Safety rules:**
+  - after a pain note, never heavier
+  - tempo sets don't drag suggestions down
+  - assisted reps don't count toward going heavier
+  - a big jump at a light weight (pin 7 to 8, 20 to 25 lb) is only *suggested*
+    after more reps than usual; it's always available as the second chip
+- Off brings back the old behaviour: copy the last set.
+
+**Backtest on all 191 real working sets that had history**, each predicted only
+from the sets before it:
+
+| | Old pre-fill | Smart next set |
+|---|---|---|
+| Weight exactly right | 28.8% | 43.5% |
+| Weight within 1 step | 51.3% | 67.0% |
+| First set of the day, weight exact | 19.4% | 46.3% |
+| Reps exactly right | 44.0% | 55.5% |
+| Right weight in one of the two chips | – | 64.9% |
+
+- `js/nextset.js`: 29 tests.
+- A read-only check on real data, with the clock set to today and to 10/19
+  mid-session, showed the warm-up suggestion, climbing, repeat after a drop
+  set, and the chips and reps hint all working. Off restores the old pre-fill.
+
+---
+
 ## [1.28.0] — 10/21/26
 
 ### Added: Pro features (Settings → Pro features, both on by default)
