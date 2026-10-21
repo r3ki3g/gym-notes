@@ -1,4 +1,4 @@
-import { parseUtterance, numberize, words, setSummary, voiceDiff } from '../js/voice.js';
+import { parseUtterance, numberize, words, setSummary, voiceDiff, understand, pickBest } from '../js/voice.js';
 
 let pass = 0, fail = 0;
 // field order never matters
@@ -85,6 +85,56 @@ eq('a per-side default the person never spoke is not "missed"',
 eq('summary keeps what matters, drops simplified',
    setSummary({ weight: 50, unit: 'kg', reps: 10, halfReps: 0, comment: '', drops: [{ weight: 30, unit: 'kg', reps: 8, extra: 1 }] }),
    { weight: 50, unit: 'kg', reps: 10, halfReps: 0, drops: [{ weight: 30, unit: 'kg', reps: 8, halfReps: 0 }] });
+
+console.log('\nwarm ups, and the Understood line\n');
+eq('"warm ups" ticks warm-up', P('warm ups 20 kg 15 reps').set.warmup, true);
+eq('"warmup" and "warming up" too', [P('warmup 20 kg 15').set.warmup, P('warming up 20 kg 15').set.warmup], [true, true]);
+const U = (t) => understand(t).map((x) => (x.changed ? `[${x.text}]` : x.text)).join(' ');
+eq('ribs -> reps, words -> digits, kilos -> kg', U('sixty kilos for twelve ribs'), '[60] [kg] for [12] [reps]');
+eq('digits and correct words are left alone', U('60 kg for 12 reps'), '60 kg for 12 reps');
+eq('decimals', U('sixty two point five kg'), '[62.5] kg');
+eq('a hundred and five', U('one hundred and five pounds'), '[105] [lb]');
+eq('warm ups', U('warm ups 20 kg'), '[warm-up] 20 kg');
+eq('the comment stays as said', U('50 kg 10 reps add comment felt strong'), '50 kg 10 reps comment: felt strong');
+eq('what was heard is kept for a tooltip', understand('12 ribs')[1], { text: 'reps', changed: true, heard: 'ribs' });
+
+console.log('\nthe 9 real transcripts from the voice log (10/21/26)\n');
+const sets = (t) => { const r = P(t); return [`${r.set.weight ?? '?'}${r.set.unit || ''}x${r.set.reps ?? '?'}`, ...r.drops.map((d) => `${d.weight}${d.unit}x${d.reps || '?'}`)]; };
+eq('1. rips, raps, "lb is", grapes', sets('20 kgs for 10 rips then 15 kgs for 20 raps then 30 lb is for 10 grapes'), ['20kgx10', '15kgx20', '30lbx10']);
+eq('2. high rep counts', sets('20 kgs for 10 raps then 13 kgs for 20 raps then 5 kgs for 40 rips'), ['20kgx10', '13kgx20', '5kgx40']);
+eq('3. "20 tips for": 20 reps, no weight invented', P('20 tips for').set, { reps: 20 });
+eq('4. "420 g" is for 20 reps', sets('20 kgs for 10 ribs then 5 kg is 420 g'), ['20kgx10', '5kgx20']);
+eq('5. "warm UPS": warm-up, no reps invented', P('20 kg warm UPS').set, { warmup: true, weight: 20, unit: 'kg' });
+eq('6. "to enter apps" is twenty reps', sets('20 kgs for 10 raps then 5 kg is for to enter apps'), ['20kgx10', '5kgx20']);
+eq('7. "4" is for', sets('20 kgs for 10 ribs then 10 kg is five raps then 5 kg is 4 2 rapes'), ['20kgx10', '10kgx5', '5kgx2']);
+eq('8. grapes, two, "kg is"', sets('20 kgs for 10 grapes then 5 kgs for two reps then 2 kg is 20 raps'), ['20kgx10', '5kgx2', '2kgx20']);
+eq('9. wraps, "kg is for two"', sets('10 kgs for 20 wraps then 5 kg is 25 raps then 30 kg is for two reps'), ['10kgx20', '5kgx25', '30kgx2']);
+eq('nothing left unparsed in them', ['20 kgs for 10 rips then 15 kgs for 20 raps then 30 lb is for 10 grapes', '20 kgs for 10 ribs then 10 kg is five raps then 5 kg is 4 2 rapes',
+  '20 kgs for 10 grapes then 5 kgs for two reps then 2 kg is 20 raps'].flatMap((t) => P(t).unparsed), []);
+eq('"20th" where a count goes', sets('2 kg is for 20th'), ['2kgx20']);
+
+console.log('\nwhat must NOT be "corrected"\n');
+eq('"for 4 reps" stays 4 reps', P('20 kg for 4 reps').set.reps, 4);
+eq('a real 4 kg dumbbell', P('4 kg for 12 reps').set, { weight: 4, unit: 'kg', reps: 12 });
+eq('a 420 lb leg press', P('420 lb for 10 reps').set, { weight: 420, unit: 'lb', reps: 10 });
+eq('"20 kg" alone gets no reps', P('20 kg').set, { weight: 20, unit: 'kg' });
+eq('grapes in a comment stay grapes', [P('50 kg 10 reps add comment grapes were good').comment, P('50 kg 10 reps add comment grapes were good').set.reps], ['Grapes were good', 10]);
+eq('words in a comment set nothing', P('50 kg 10 reps add comment slow failure help').set, { weight: 50, unit: 'kg', reps: 10 });
+eq('grapes not after a number is not reps', P('50 kg grapes').unparsed, ['grapes']);
+eq('blocks stay blocks', P('5 blocks for 10 reps').set, { weight: 5, unit: 'block', reps: 10 });
+
+console.log('\nChrome\'s alternatives\n');
+eq('a complete alternative beats a broken first guess',
+   pickBest(['20 kgs for 10 grapes then 5 kg is', '20 kgs for 10 grapes then 5 kgs for 20 reps']).index, 1);
+eq('agreeing guesses keep the first', pickBest(['5 kg is 4 2 rapes', '5 kg is 4 2 raps', '5 kgs for 2 rapes']).index, 0);
+const amb = pickBest(['5 kg for 2 reps', '5 kg for 4 reps']);
+eq('different numbers, close: the doubt is kept', [amb.index, amb.doubt?.text], [0, '5 kg for 4 reps']);
+
+console.log('\nthe Understood line shows the repairs\n');
+eq('"5 kg is 4 2 rapes"', U('5 kg is 4 2 rapes'), '5 [kg] [for] 2 [reps]');
+eq('"5 kg is 420 g"', U('5 kg is 420 g'), '5 [kg] [for] [20] [reps]');
+eq('"for to enter apps"', U('5 kg is for to enter apps'), '5 [kg] for [20] [reps]');
+eq('grapes only after a number', U('50 kg grapes'), '50 kg grapes');
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

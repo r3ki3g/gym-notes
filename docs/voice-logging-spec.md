@@ -42,7 +42,9 @@ set form fills itself in. You check it and tap Save.
 1. Tap the mic. The button pulses while listening and keeps listening
    through pauses. It stops a set time after your last word (Settings, 3s by
    default), or on a second tap, and waits at least 6s for the first word.
-2. What was heard shows live, word by word: "60 kg 12 reps failure".
+2. Two lines update live, word by word. **Heard** (grey) is exactly what came
+   back. **Understood** is how the parser took it, with corrections in green,
+   e.g. "twelve ribs" reads **12 reps**.
 3. The form fills live as you speak, and a field sweeps gold each time its
    value changes (see The fill animation). Nothing unparsed is guessed.
 4. **You tap Save.** It never saves by voice, because a misheard number must
@@ -102,17 +104,17 @@ marked in red to check.
 
 ## The fill animation
 
-Each field that voice fills in gets a **gold border that sweeps round it
-once**: a rotating gold gradient, about 0.9s. The sweeps start one after
-another, 80ms apart, in the order you spoke, so you can follow what landed
-where. Drop rows slide in. Afterwards a soft gold outline stays until you edit
-that field, or for 4s. With "reduce motion" on, it's a plain gold outline only.
+Each field voice fills gets a **gold border that keeps turning round it**: a
+rotating gold gradient, bright for 3s, then dimmed. It stays until you touch
+that field, so a drop added below the fold is still obvious after a scroll.
+The sweeps start one after another, 80ms apart, in form order; drop rows slide
+in.
 
-**Language:** English, using the phone's accent setting (en-US by default,
-switchable to en-GB or en-IN in Settings if recognition struggles).
+Anything required that wasn't heard gets a **pulsing red ring** and a line
+saying what: no reps, no weight (the suggested one is kept), or a drop with no
+reps. With "reduce motion" on, both rings stay still.
 
-**Settings → Pro features → Voice logging:** on by default. The mic button
-only appears where the browser supports it.
+**Clear set**, beside Say the set, puts the form back to how it opened.
 
 ## What can go wrong, and what we do
 

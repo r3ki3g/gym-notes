@@ -612,11 +612,15 @@ body.is-editing{
 @keyframes mic-pulse{0%{box-shadow:0 0 0 0 rgba(240,180,41,.55)}100%{box-shadow:0 0 0 12px rgba(240,180,41,0)}}
 .voice-heard{margin-top:7px;color:var(--dim);line-height:1.45}
 .voice-miss{color:var(--warn)}
+.voice-said{color:var(--faint)}
+.voice-understood{color:var(--text);margin-top:2px}
+.voice-tag{display:inline-block;min-width:76px;font-size:.6rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+.voice-fix{color:var(--good);font-weight:700}
 .voice-err{color:var(--bad)}
 
-/* a field voice just filled: a gold border sweeps round it once (a conic
+/* a field voice filled: a gold border keeps turning round it (a conic
    gradient whose start angle turns, shown only in a 2px ring by the mask),
-   then a soft gold outline stays until the field is touched, or 4s */
+   bright for 3s, then dimmed, until the field is touched */
 @property --vang{syntax:"<angle>";inherits:false;initial-value:0deg}
 .voice-fill{position:relative;border-radius:10px}
 .voice-fill::after{
@@ -624,14 +628,22 @@ body.is-editing{
   background:conic-gradient(from var(--vang), transparent 0deg 200deg, var(--gold-fill) 290deg, #fff3c4 330deg, var(--gold-fill) 345deg, transparent 360deg);
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
   mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
-  animation:voice-sweep 900ms linear both, voice-settle 1ms linear forwards;
-  animation-delay:var(--vd, 0ms), calc(var(--vd, 0ms) + 900ms);
+  animation:voice-sweep 1400ms linear infinite, voice-dim 700ms ease-out forwards;
+  animation-delay:var(--vd, 0ms), calc(var(--vd, 0ms) + 3s);
 }
 @keyframes voice-sweep{from{--vang:0deg}to{--vang:360deg}}
-@keyframes voice-settle{to{background:color-mix(in srgb, var(--gold-fill) 60%, transparent)}}
+@keyframes voice-dim{to{opacity:.45}}
+/* required but not heard (reps, a drop's reps): a red ring that pulses */
+.voice-missing{position:relative;border-radius:10px}
+.voice-missing::after{
+  content:"";position:absolute;inset:-3px;border-radius:12px;pointer-events:none;
+  border:2px solid var(--bad);animation:voice-missing 1.1s ease-in-out infinite alternate;
+}
+@keyframes voice-missing{from{opacity:1}to{opacity:.35}}
+.voice-row{display:flex;flex-wrap:wrap;gap:8px}
+.mic-clear{display:inline-flex;align-items:center;gap:7px;min-height:40px;color:var(--dim)}
 .voice-drop-in{animation:voice-drop-in 380ms cubic-bezier(.2,.8,.3,1) both;animation-delay:var(--vd, 0ms)}
 @keyframes voice-drop-in{from{opacity:0;transform:translateY(-8px)}}
-.voice-warn{border-color:var(--bad)}
 
 /* ---------- Pro features: streak calendar (js/streak.js) ---------- */
 .streak-person + .streak-person{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
@@ -779,6 +791,7 @@ button.streak-cell{cursor:pointer}
   .rest-live-time{animation:none}
   .pr-flash::after,.day-pulse{animation:none}
   .voice-fill::after{animation:none;background:color-mix(in srgb, var(--gold-fill) 60%, transparent)}
+  .voice-missing::after{animation:none}
   .mic-btn.listening,.voice-drop-in{animation:none}
 }
 

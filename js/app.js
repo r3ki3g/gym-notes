@@ -5,7 +5,7 @@ import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
 import { allPRs, newPRs } from './pr.js';
 import { suggestNext } from './nextset.js';
-import { parseUtterance, setSummary, voiceDiff } from './voice.js';
+import { parseUtterance, setSummary, voiceDiff, understand, pickBest } from './voice.js';
 import { speechSupported, listen, speechError } from './speech.js';
 import { gymDays, grid, streaks, parseTarget } from './streak.js';
 import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
@@ -1012,6 +1012,10 @@ function heldSets() {
 /** Set by the mic beside "+ add set": the form opens already listening. */
 let listenOnOpen = false;
 
+/** Writes the voice session in progress, if the page is closed mid-sentence. */
+let flushVoiceSession = null;
+window.addEventListener('pagehide', () => flushVoiceSession?.('left'));
+
 /** Settings → Pro features → Voice logging. On by default; the mic shows only where the browser can do it. */
 const voiceOn = () => { try { return localStorage.getItem('gn.voice') !== '0'; } catch { return true; } };
 
@@ -1836,38 +1840,78 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       const heard = el('div', { class: 'voice-heard tiny' },
         el('span', { class: 'faint' }, 'e.g. "60 kg for 10 then 40 for 8, add comment slow and heavy"'));
       let stop = null;
+      let cleared = false;
+      // Clear set: back to how the form opened (the suggestion, empty reps), to say it again
+      const clearBtn = el('button', { type: 'button', class: 'btn mic-clear', onClick: () => {
+        cleared = true; stop?.();
+        formDirty = false;
+        render();
+        toast('Cleared: say the set again');
+      } }, icon('rotate-ccw', { size: 16 }), 'Clear set');
       mic.addEventListener('click', () => {
         if (stop) { stop(); return; }
         formDirty = true;   // a set arriving from the other phone must not rebuild the form mid-sentence
         const vs = { applied: {}, comment: null };   // this session: what has been filled so far
         const secs = voiceSilence();
+
+        // The voice log: every listening session, saved or not, with each
+        // update the recogniser sent on the way (how "rips" became "raps"), so
+        // mishearings can be found and taught to the parser. One write per
+        // session, whatever its end: heard, nothing, error, cleared, or the
+        // page closed. Saving the set adds what was kept.
+        const session = { startedAt: Date.now(), events: [], written: false, last: '' };
+        const writeLog = (outcome, extra = {}) => {
+          if (session.written) return;
+          session.written = true;
+          if (flushVoiceSession === flushThis) flushVoiceSession = null;
+          try {
+            const id = S.addVoiceLog({
+              outcome, text: session.last, events: session.events.slice(0, 300),
+              exerciseId: ex.id, exercise: ex.name, profileId: p.id, enteredBy: state.owner || null,
+              deviceId: currentDeviceId(), version: VERSION, browser: usageBrowser || navigator.userAgent.slice(0, 120),
+              silenceSecs: secs, startedAt: session.startedAt, durationMs: Date.now() - session.startedAt, saved: null,
+              ...extra,
+            });
+            if (extra.parsed) voiceLogs.push({ id, parsed: extra.parsed });
+          } catch { /* the log is best-effort; it never blocks logging a set */ }
+        };
+        const flushThis = (outcome) => writeLog(outcome);
+        flushVoiceSession = flushThis;
         mic.classList.add('listening'); label.textContent = 'Listening… tap to stop';
         heard.replaceChildren(el('span', { class: 'faint' }, `Listening: stops ${secs}s after you stop talking`));
         // fills the form as the words arrive; stops after the pause set in Settings
         stop = listen({
           silenceMs: secs * 1000,
-          onText: (t) => applyVoice(t, { vs, heard, final: false }),
+          onText: (t) => {
+            if (t !== session.last) { session.last = t; session.events.push({ ms: Date.now() - session.startedAt, text: t }); }
+            if (!cleared) applyVoice(t, { vs, heard, final: false });
+          },
           onDone: (res) => {
             stop = null; mic.classList.remove('listening'); label.textContent = 'Say the set';
-            if (res.error) return heard.replaceChildren(el('span', { class: 'voice-err' }, speechError(res.error)));
-            if (!res.text) return heard.replaceChildren(el('span', { class: 'faint' }, "Didn't hear anything: tap and try again"));
-            const parsed = applyVoice(res.text, { vs, heard, final: true, local: res.local });
-            // the voice log: what was heard and how it was read; saving adds what was kept
-            if (usageCounted()) {
-              try {
-                const id = S.addVoiceLog({
-                  text: res.text, alternatives: res.alternatives || [], local: !!res.local, lang: res.lang || null,
-                  parsed: { set: parsed.set, drops: parsed.drops, notes: parsed.notes, comment: parsed.comment, unparsed: parsed.unparsed, warnings: parsed.warnings },
-                  exerciseId: ex.id, exercise: ex.name, profileId: p.id, enteredBy: state.owner || null,
-                  deviceId: currentDeviceId(), version: VERSION, browser: usageBrowser || null, saved: null,
-                });
-                voiceLogs.push({ id, parsed });
-              } catch { /* the log is best-effort; it never blocks logging a set */ }
+            const how = { alternatives: res.alternatives || [], local: !!res.local, lang: res.lang || null };
+            if (res.text) session.last = res.text;
+            if (cleared) return writeLog('cleared', how);
+            if (res.error) {
+              writeLog('error', { ...how, error: res.error });
+              return heard.replaceChildren(el('span', { class: 'voice-err' }, speechError(res.error)));
             }
+            if (!res.text) {
+              writeLog('nothing', how);
+              return heard.replaceChildren(el('span', { class: 'faint' }, "Didn't hear anything: tap and try again"));
+            }
+            // Chrome's answer and its alternatives are each a whole guess: keep the most complete reading
+            const best = pickBest([res.text, ...(res.alternatives || [])], { timed, bodyweight: !loaded, unit: draft.unit });
+            const hints = [
+              best.index ? el('div', { class: 'faint' }, `Chrome's first guess was "${res.text}"; its ${best.index === 1 ? '2nd' : '3rd'} guess read better`) : null,
+              best.doubt ? el('div', { class: 'voice-miss' }, `Chrome also heard "${best.doubt.text}": check the numbers`) : null,
+            ];
+            const r = applyVoice(best.text, { vs, heard, final: true, local: res.local, hints });
+            writeLog('heard', { ...how, chosen: best.index, chosenText: best.text, doubt: best.doubt?.text || null,
+              parsed: { set: r.set, drops: r.drops, notes: r.notes, comment: r.comment, unparsed: r.unparsed, warnings: r.warnings } });
           },
         });
       });
-      form.append(el('div', { class: 'voice' }, mic, heard));
+      form.append(el('div', { class: 'voice' }, el('div', { class: 'voice-row' }, mic, clearBtn), heard));
       if (listenOnOpen) { listenOnOpen = false; mic.click(); }
     }
   }
@@ -2070,7 +2114,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
    * gold border round a field each time its value changes, so you can see what
    * landed where. `vs` remembers this listening session's fills.
    */
-  function applyVoice(text, { vs, heard, final, local = false }) {
+  function applyVoice(text, { vs, heard, final, local = false, hints = [] }) {
     formDirty = true;   // a set arriving from the other phone must not wipe this
     const r = parseUtterance(text, { timed, bodyweight: !loaded, unit: draft.unit });
     const lit = [];
@@ -2119,35 +2163,88 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       vs.applied.drops = JSON.stringify(r.drops);
       draft.drops = r.drops.map(({ weight: w, unit: u, reps, halfReps }) => ({ weight: w, unit: units.includes(u) ? u : draft.unit, reps, halfReps }));
       paintDrops();
+      // each drop's own fields get a ring, as the set's do: weight, unit, reps, half reps
       [...dropsWrap.querySelectorAll('.card')].forEach((c, i) => {
         c.classList.add('voice-drop-in');
-        if (r.drops[i]?.heavier) c.classList.add('voice-warn');
-        lit.push(c);
+        const d = r.drops[i];
+        if (!d) return;
+        const [fw, fu, fr, fh] = c.querySelectorAll('label.field');
+        lit.push(fw, fu);
+        if (d.reps) lit.push(fr);
+        if (d.halfReps) lit.push(fh);
       });
     }
 
-    // the sweep, staggered 80ms in form order
+    // The ring keeps turning on everything voice filled, dimmed after 3s, so a
+    // drop added further down is still obvious after a scroll. Touching the
+    // field ends it: the value is yours then. Staggered 80ms in form order.
     lit.forEach((n, i) => {
-      n.classList.remove('voice-fill'); void n.offsetWidth;
+      n.classList.remove('voice-fill', 'voice-missing'); void n.offsetWidth;
       n.style.setProperty('--vd', `${i * 80}ms`);
       n.classList.add('voice-fill');
       const off = () => n.classList.remove('voice-fill');
       n.addEventListener('input', off, { once: true });
       n.addEventListener('pointerdown', off, { once: true });
-      setTimeout(off, 4000 + i * 80);
     });
 
+    // Heard (grey): exactly what came back. Understood: the same words as the
+    // parser took them, corrections in green ("ribs" -> reps, "sixty" -> 60).
+    const lines = (extra = []) => heard.replaceChildren(...[
+      el('div', { class: 'voice-said' }, el('span', { class: 'voice-tag' }, 'Heard'), ` ${text}`,
+        local ? el('span', { class: 'faint' }, ' · on this phone') : null),
+      el('div', { class: 'voice-understood' }, el('span', { class: 'voice-tag' }, 'Understood'), ' ',
+        ...understand(text).flatMap((x, i) => [i ? ' ' : '',
+          x.changed ? el('span', { class: 'voice-fix', title: `heard "${x.heard}"` }, x.text) : x.text])),
+      ...extra,
+    ].filter(Boolean));
+    // Required but not heard: a red ring on the field, and a line saying so.
+    // Checked 1s into any pause while still talking, not only at the end; the
+    // next words clear it if they fill the gap.
+    const checkMissing = () => {
+      for (const n of vs.red || []) n.classList.remove('voice-missing');
+      vs.red = [];
+      const out = [];
+      const flag = (n, msg) => {
+        if (!n) return;
+        n.classList.remove('voice-fill'); n.classList.add('voice-missing'); vs.red.push(n);
+        const off = () => n.classList.remove('voice-missing');
+        n.addEventListener('input', off, { once: true });
+        n.addEventListener('pointerdown', off, { once: true });
+        if (msg) out.push(msg);
+      };
+      const saidSome = r.set.weight != null || r.set.reps != null || r.set.seconds != null || r.drops.length;
+      if (saidSome && !timed && r.set.reps == null) flag(fieldOf(effort.node), 'No reps heard: say it again, or type them');
+      if (saidSome && timed && r.set.seconds == null) flag(fieldOf(effort.node), 'No time heard: say it again, or type it');
+      if (saidSome && loaded && !timed && r.set.weight == null) {
+        flag(fieldOf(weight.node), `No weight heard: kept ${formatLoad(draft.weight, draft.unit, draft.perSide)}, check it`);
+      }
+      const dropCards = [...dropsWrap.querySelectorAll('.card')];
+      r.drops.forEach((d, i) => {
+        const [fw, , fr] = dropCards[i]?.querySelectorAll('label.field') || [];
+        if (!d.reps) flag(fr, `Drop ${i + 1}: no reps heard`);
+        if (d.heavier) flag(fw, null);
+      });
+      return out;
+    };
+    clearTimeout(vs.missTimer);
     if (!final) {
-      heard.replaceChildren(el('span', {}, `“${text}”`), el('span', { class: 'faint' }, '  · listening'));
+      for (const n of vs.red || []) n.classList.remove('voice-missing');   // still talking: give them the chance
+      lines([el('div', { class: 'faint' }, 'listening…')]);
+      vs.missTimer = setTimeout(() => {
+        const msgs = checkMissing();
+        lines([...msgs.map((m) => el('div', { class: 'voice-err' }, m)), el('div', { class: 'faint' }, 'listening…')]);
+      }, 1000);
       return r;
     }
     const filled = Object.keys(vs.applied).length || vs.comment || r.notes.length;
-    heard.replaceChildren(...[
-      el('div', {}, el('span', { class: 'faint' }, 'Heard: '), `“${text}”`, local ? el('span', { class: 'faint' }, ' · on this phone') : null),
+    const missing = checkMissing();
+    lines([
+      ...hints,
       r.unparsed.length ? el('div', { class: 'voice-miss' }, `Didn't catch: ${r.unparsed.join(' ')}`) : null,
+      ...missing.map((m) => el('div', { class: 'voice-err' }, m)),
       ...issues.map((m) => el('div', { class: 'voice-err' }, m)),
       filled ? null : el('div', { class: 'voice-err' }, 'Nothing to fill in: try "60 kg for 10 reps"'),
-    ].filter(Boolean));
+    ]);
     return r;
   }
 

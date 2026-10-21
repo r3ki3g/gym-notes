@@ -11,6 +11,140 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.37.0] — 10/21/26
+
+### Changed: voice understands what Chrome mishears
+Built from the voice log's real transcripts and ChatGPT's review of them
+(prompt in `docs/research/chatgpt-voice-prompt.md`).
+- **Repairs only where the grammar expects them** (`repair()` in
+  `js/voice.js`). "Reps expected" means a weight with its unit has been said
+  and no reps yet.
+  - **raps, rips, ribs, rapes, wraps, grapes, tips, apps** straight after a
+    number → reps. "grapes" anywhere else, comments included, stays grapes.
+  - **"kg is" / "lb is"** → kg / lb, since Chrome splits "kgs".
+  - **"4"** between a weight and the reps → "for": "5 kg is 4 2 rapes" →
+    5 kg × 2. "20 kg for 4 reps" stays 4 reps, and a 4 kg dumbbell stays 4 kg.
+  - **"420"** where reps are expected → "for 20". A 420 lb leg press stays 420.
+  - **"to enter"** where reps are expected → 20, **"20th"** → 20, and "g" where
+    reps go → reps.
+- **Chrome's alternatives are used.** Its answer and its 2 other guesses are
+  each parsed, and the most complete reading wins, with a bonus when guesses
+  agree. When a backup guess wins, the form says so. When the runner-up reads
+  different numbers within 2 points, it warns: "Chrome also heard '…': check
+  the numbers".
+- **The Understood line shows these repairs in green**, from the same repair
+  step the form uses, so the two always agree.
+- **The voice log records which guess was chosen**, and any doubt.
+
+Verified:
+- 83 parser tests, including all **9 real transcripts** read as meant with
+  nothing left over
+- ChatGPT's "must not change" cases: 4 reps, a 4 kg dumbbell, a 420 lb leg
+  press, comments, blocks
+- end to end, transcript #7 with its real alternatives filled 20×10 and drops
+  10×5 and 5×2
+- a broken first guess lost to a complete 2nd
+- a 2-vs-4 reps disagreement warned
+
+---
+
+## [1.36.1] — 10/21/26
+
+### Fixed
+- **The red "not heard" ring came only when listening ended**, 3s or more
+  after you'd stopped talking. It now shows 1s into any pause while voice is
+  still listening, and clears by itself if your next words fill the gap.
+  Verified: "…then 30" with a pause put the red ring on the drop's reps at
+  1.5s, still listening. Saying "…for 12" at 2.5s turned it gold and removed
+  the message.
+
+---
+
+## [1.36.0] — 10/21/26
+
+### Changed: the voice log keeps every session, and every update in it
+- **Each listening session is written once, however it ends**, with an
+  `outcome`:
+  - `heard`: understood, saved or not
+  - `nothing`: no speech
+  - `error`
+  - `cleared`: Clear set was tapped
+  - `left`: the page was closed mid-sentence
+- **It keeps every update the recogniser sent on the way** (`events`, with
+  ms from the start), not just the final sentence, so you can see how a word
+  changed: "20 kgs for 10 rips" → "…10 raps…".
+- **It no longer depends on "Count this device in usage stats"**, so testing on
+  a laptop is logged too. Saving still attaches what was kept and what was
+  corrected by hand.
+
+Verified on the Test profile:
+- a heard-but-unsaved session was logged with its 3 updates
+- a cleared session and a silent session were logged as such
+- a saved session was linked to its set
+- cleanup deleted 5 documents, 0 left
+
+The 10 sessions logged so far already show the pattern: reps heard as rips,
+raps, ribs, wraps, tips, grapes and apps; "kgs" as "kg is"; "twenty" as "to
+enter"; "for 20" as "420".
+
+---
+
+## [1.35.0] — 10/21/26
+
+### Added
+- **An "Understood" line under "Heard".** Heard (grey) is exactly what came
+  back from the recogniser. Understood repeats it the way the parser took it,
+  with every correction in green: "sixty kilos for twelve ribs" reads
+  **60 kg** for **12 reps**. Hover or long-press a green word to see what was
+  heard. Both lines update with every word while you're still talking, as the
+  form already does.
+
+### Changed
+- **Drops get rings per field.** Each drop's weight, unit, reps and half reps
+  now have their own gold ring, as the set's do, instead of one ring round the
+  whole card. A drop with no reps puts the red ring on that drop's reps field.
+  A drop heavier than the set puts it on that drop's weight.
+
+### Fixed
+- **"warm ups"**, plural, now ticks Warm-up, as do "warmup" and "warming up".
+
+Verified with the stand-in recogniser, word by word:
+- at 0.5s, mid-sentence, the weight was filled and "60 kg" showed green
+- at 0.9s, the reps were 12 and "ribs" showed as green reps
+- at the end, the drop's weight, unit and reps each had a gold ring
+- "warm ups" ticked Warm-up
+- "…then 40" put the red ring on the drop's reps
+- 57 parser tests pass
+
+---
+
+## [1.34.0] — 10/21/26
+
+### Changed: voice feedback stays until you've looked
+- **The gold ring keeps turning** on everything voice filled, bright for 3s and
+  then dimmed to 45%. It no longer disappears after 4s, so a drop added below
+  the fold is still obvious after you scroll down. Touching a field ends its
+  ring, because the value is yours then.
+- **Required but not heard shows red:** a pulsing red ring and a line saying
+  what's missing.
+  - weight said but no reps: "No reps heard: say it again, or type them"
+  - reps said but no weight: "No weight heard: kept 55 lb, check it"
+  - a drop with no reps: "Drop 1: no reps heard"
+  - on timed exercises, no time heard
+
+### Added
+- **Clear set**, beside Say the set: the form goes back to how it opened (the
+  suggestion, reps empty, no drops), so the set can be said again.
+
+Verified with the stand-in recogniser:
+- "60 lbs then 30 for 12" put a red ring on Reps with the message
+- "…then 30" put a red ring on the drop
+- at 6.2s the ring was still turning, at 45% opacity
+- touching Reps cleared only that ring
+- Clear set reset the form with no rings left
+
+---
+
 ## [1.33.0] — 10/21/26
 
 ### Changed: voice listens until you stop talking
