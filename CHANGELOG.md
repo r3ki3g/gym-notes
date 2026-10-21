@@ -11,6 +11,32 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.33.0] — 10/21/26
+
+### Changed: voice listens until you stop talking
+- **It keeps listening through pauses**, and stops a set time after your last
+  word. That's **Settings → Pro features → Voice: wait before stopping**, 3s
+  by default, adjustable from 1 to 10s. It used to stop at Chrome's first
+  pause, cutting people off while they recalled the set.
+- **Before the first word it waits at least 6s**, so there's time to remember
+  what you just did. A tap on the mic still stops it at any time. Chrome ends
+  sessions by itself after a pause; those are restarted invisibly, keeping
+  everything heard.
+- **The form fills live as you speak**, not at the end. Each field sweeps gold
+  when its value changes. A spoken comment that grows ("slow", then "slow and
+  heavy") replaces itself instead of stacking.
+
+Verified with a stand-in recogniser on a timeline:
+- the fields filled at 0.8s while still listening
+- Chrome's own stop at 1.0s was restarted
+- a 1.9s pause didn't end it
+- it stopped 3s after the last word (5,504 ms)
+- the 5s setting stopped at 5,603 ms
+- with nothing said, it waited 6s
+- the growing comment didn't duplicate
+
+---
+
 ## [1.32.0] — 10/21/26
 
 ### Added

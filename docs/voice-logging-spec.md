@@ -39,11 +39,12 @@ set form fills itself in. You check it and tap Save.
 **Where:** a mic button on the add-set form, next to the Reps field.
 
 **Flow:**
-1. Tap the mic. The button pulses while listening and stops on its own after
-   a short pause, or on a second tap.
+1. Tap the mic. The button pulses while listening and keeps listening
+   through pauses. It stops a set time after your last word (Settings, 3s by
+   default), or on a second tap, and waits at least 6s for the first word.
 2. What was heard shows live, word by word: "60 kg 12 reps failure".
-3. The parsed values fill the form, each with a sweeping gold border (see
-   The fill animation). Nothing unparsed is guessed.
+3. The form fills live as you speak, and a field sweeps gold each time its
+   value changes (see The fill animation). Nothing unparsed is guessed.
 4. **You tap Save.** It never saves by voice, because a misheard number must
    always be visible first.
 

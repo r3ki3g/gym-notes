@@ -6,7 +6,7 @@ import { searchExercises, recentFrequency, MUSCLES } from './search.js';
 import { allPRs, newPRs } from './pr.js';
 import { suggestNext } from './nextset.js';
 import { parseUtterance, setSummary, voiceDiff } from './voice.js';
-import { speechSupported, listenOnce, speechError } from './speech.js';
+import { speechSupported, listen, speechError } from './speech.js';
 import { gymDays, grid, streaks, parseTarget } from './streak.js';
 import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
 import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
@@ -798,6 +798,20 @@ function viewSettings(v) {
     voiceOn,
     (on) => { try { localStorage.setItem('gn.voice', on ? '1' : '0'); } catch {} }
   ));
+  const silenceVal = el('span', { class: 'limit-val' }, `${voiceSilence()} s`);
+  const nudgeSilence = (dir) => {
+    const next = Math.min(10, Math.max(1, voiceSilence() + dir));
+    try { localStorage.setItem('gn.voiceSilence', String(next)); } catch {}
+    silenceVal.textContent = `${next} s`;
+  };
+  v.append(el('div', { class: 'row spread card', style: 'background:var(--panel-2)' },
+    el('div', { class: 'grow' },
+      el('div', {}, 'Voice: wait before stopping'),
+      el('div', { class: 'tiny faint', style: 'margin-top:2px' }, 'Seconds of silence before it stops listening. Longer gives you time to think')),
+    el('button', { class: 'btn sm', 'aria-label': 'Shorter', onClick: () => nudgeSilence(-1) }, '−'),
+    silenceVal,
+    el('button', { class: 'btn sm', 'aria-label': 'Longer', onClick: () => nudgeSilence(1) }, '+')
+  ));
   v.append(toggleRow(
     'Smart next set',
     'Starts where you started last time, climbs back up, repeats after a hard set; reps show as a target. Off: copies your last set',
@@ -1000,6 +1014,9 @@ let listenOnOpen = false;
 
 /** Settings → Pro features → Voice logging. On by default; the mic shows only where the browser can do it. */
 const voiceOn = () => { try { return localStorage.getItem('gn.voice') !== '0'; } catch { return true; } };
+
+/** Settings → Pro features → Voice: seconds of silence before it stops listening (1–10, default 3). */
+const voiceSilence = () => { try { const n = parseInt(localStorage.getItem('gn.voiceSilence'), 10); return Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 3; } catch { return 3; } };
 
 /** Settings → Pro features → Smart next set. On by default. */
 const smartOn = () => { try { return localStorage.getItem('gn.smartNext') !== '0'; } catch { return true; } };
@@ -1822,15 +1839,19 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       mic.addEventListener('click', () => {
         if (stop) { stop(); return; }
         formDirty = true;   // a set arriving from the other phone must not rebuild the form mid-sentence
+        const vs = { applied: {}, comment: null };   // this session: what has been filled so far
+        const secs = voiceSilence();
         mic.classList.add('listening'); label.textContent = 'Listening… tap to stop';
-        heard.replaceChildren(el('span', { class: 'faint' }, 'Listening…'));
-        stop = listenOnce({
-          onText: (t) => heard.replaceChildren(el('span', {}, `“${t}”`)),
+        heard.replaceChildren(el('span', { class: 'faint' }, `Listening: stops ${secs}s after you stop talking`));
+        // fills the form as the words arrive; stops after the pause set in Settings
+        stop = listen({
+          silenceMs: secs * 1000,
+          onText: (t) => applyVoice(t, { vs, heard, final: false }),
           onDone: (res) => {
             stop = null; mic.classList.remove('listening'); label.textContent = 'Say the set';
             if (res.error) return heard.replaceChildren(el('span', { class: 'voice-err' }, speechError(res.error)));
             if (!res.text) return heard.replaceChildren(el('span', { class: 'faint' }, "Didn't hear anything: tap and try again"));
-            const parsed = applyVoice(res.text, res.local, heard);
+            const parsed = applyVoice(res.text, { vs, heard, final: true, local: res.local });
             // the voice log: what was heard and how it was read; saving adds what was kept
             if (usageCounted()) {
               try {
@@ -2045,29 +2066,32 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
   if (!timed && loaded) form.append(el('h3', {}, 'Drop set'), dropsWrap);
 
   /**
-   * Puts what was heard into the form, and sweeps a gold border round each
-   * field it filled, in the order of the form, so you can see what landed where.
+   * Puts what was heard into the form, live as the words arrive, and sweeps a
+   * gold border round a field each time its value changes, so you can see what
+   * landed where. `vs` remembers this listening session's fills.
    */
-  function applyVoice(text, local, heard) {
+  function applyVoice(text, { vs, heard, final, local = false }) {
     formDirty = true;   // a set arriving from the other phone must not wipe this
     const r = parseUtterance(text, { timed, bodyweight: !loaded, unit: draft.unit });
     const lit = [];
     const fieldOf = (n) => n.closest('label.field') || n;
+    const mark = (key, val, node) => { const v = JSON.stringify(val); if (vs.applied[key] !== v) { vs.applied[key] = v; lit.push(node); } };
     const issues = [...r.warnings];
 
     if (loaded && r.set.unit) {
       if (units.includes(r.set.unit)) {
         if (r.set.unit !== draft.unit) { draft.unit = r.set.unit; weight.setStep(stepFor(r.set.unit)); paintUnits(); }
+        mark('unit', draft.unit, fieldOf(unitRow));
       } else issues.push(`${UNITS[r.set.unit]?.label || r.set.unit} isn't a unit for this exercise`);
     }
-    if (loaded && r.set.weight != null) { draft.weight = r.set.weight; weight.set(r.set.weight); lit.push(fieldOf(weight.node), fieldOf(unitRow)); }
+    if (loaded && r.set.weight != null) { draft.weight = r.set.weight; weight.set(r.set.weight); mark('weight', r.set.weight, fieldOf(weight.node)); }
     if (timed && r.set.seconds != null) {
       draft.seconds = r.set.seconds; effort.set(r.set.seconds); if (clock) clock.textContent = formatDuration(r.set.seconds);
-      lit.push(fieldOf(effort.node));
+      mark('seconds', r.set.seconds, fieldOf(effort.node));
     }
-    if (!timed && r.set.reps != null) { draft.reps = r.set.reps; effort.set(r.set.reps); lit.push(fieldOf(effort.node)); }
-    if (!timed && r.set.halfReps) { halfInput.value = String(r.set.halfReps); lit.push(fieldOf(halfInput)); }
-    if (r.set.support) { draft.support = r.set.support; paintSupport(); lit.push(fieldOf(supportRow)); }
+    if (!timed && r.set.reps != null) { draft.reps = r.set.reps; effort.set(r.set.reps); mark('reps', r.set.reps, fieldOf(effort.node)); }
+    if (!timed && r.set.halfReps) { halfInput.value = String(r.set.halfReps); mark('halfReps', r.set.halfReps, fieldOf(halfInput)); }
+    if (r.set.support) { draft.support = r.set.support; paintSupport(); mark('support', r.set.support, fieldOf(supportRow)); }
     // toggles go through their own buttons, so per side and each side still confirm
     const flip = (label, key) => {
       const b = [...form.querySelectorAll('button')].find((x) => x.textContent === label);
@@ -2084,9 +2108,15 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
     if (r.set.unilateral) flip('Each side', 'unilateral');
     let note = false;
     for (const n of r.notes) if (!hasNote(commentBox.value, n)) { commentBox.value = toggleNote(commentBox.value, n); note = true; }
-    if (r.comment && !hasNote(commentBox.value, r.comment)) { commentBox.value = toggleNote(commentBox.value, r.comment); note = true; }
+    // the spoken comment grows as you talk ("slow", then "slow and heavy"): replace, never pile up
+    if ((r.comment || null) !== vs.comment) {
+      if (vs.comment && hasNote(commentBox.value, vs.comment)) commentBox.value = toggleNote(commentBox.value, vs.comment);
+      if (r.comment && !hasNote(commentBox.value, r.comment)) commentBox.value = toggleNote(commentBox.value, r.comment);
+      vs.comment = r.comment || null; note = true;
+    }
     if (note) { lightChips(); lit.push(fieldOf(commentBox)); }
-    if (r.drops.length && !timed && loaded) {
+    if (r.drops.length && !timed && loaded && vs.applied.drops !== JSON.stringify(r.drops)) {
+      vs.applied.drops = JSON.stringify(r.drops);
       draft.drops = r.drops.map(({ weight: w, unit: u, reps, halfReps }) => ({ weight: w, unit: units.includes(u) ? u : draft.unit, reps, halfReps }));
       paintDrops();
       [...dropsWrap.querySelectorAll('.card')].forEach((c, i) => {
@@ -2107,11 +2137,16 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
       setTimeout(off, 4000 + i * 80);
     });
 
+    if (!final) {
+      heard.replaceChildren(el('span', {}, `“${text}”`), el('span', { class: 'faint' }, '  · listening'));
+      return r;
+    }
+    const filled = Object.keys(vs.applied).length || vs.comment || r.notes.length;
     heard.replaceChildren(...[
       el('div', {}, el('span', { class: 'faint' }, 'Heard: '), `“${text}”`, local ? el('span', { class: 'faint' }, ' · on this phone') : null),
       r.unparsed.length ? el('div', { class: 'voice-miss' }, `Didn't catch: ${r.unparsed.join(' ')}`) : null,
       ...issues.map((m) => el('div', { class: 'voice-err' }, m)),
-      lit.length ? null : el('div', { class: 'voice-err' }, 'Nothing to fill in: try "60 kg for 10 reps"'),
+      filled ? null : el('div', { class: 'voice-err' }, 'Nothing to fill in: try "60 kg for 10 reps"'),
     ].filter(Boolean));
     return r;
   }

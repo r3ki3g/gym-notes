@@ -42,42 +42,75 @@ export function speechError(code) {
 }
 
 /**
- * Listens once: stops by itself after a short pause, or when stop() is called.
- * @param onText  (text, final) as words come in
+ * Listens until you stop talking: continuous recognition, ended by our own
+ * timer `silenceMs` after the last word (Settings → Pro features), by stop(),
+ * or after `maxMs`. Before the first word it waits longer (`firstWordMs`):
+ * recalling the set you just did takes a moment. Chrome ends sessions on its
+ * own after a pause; those are restarted, keeping what was heard.
+ *
+ * @param onText  (text so far) on every update: final words plus the guess in progress
  * @param onDone  ({ text, local, lang, alternatives } | { error })
  * @returns stop()
  */
-export function listenOnce({ onText, onDone }) {
+export function listen({ silenceMs = 3000, firstWordMs = 6000, maxMs = 60000, onText, onDone }) {
   const R = Recognition();
   if (!R) { onDone({ error: 'unsupported' }); return () => {}; }
   const lang = speechLang();
-  let rec = null, stopped = false, finished = false, error = null, heard = '', local = false;
+  let rec = null, stopped = false, finished = false, error = null, local = false;
+  let heard = '', interim = '';
   const alternatives = [];
-  const finish = (res) => { if (!finished) { finished = true; onDone(res); } };
+  let silence = null, cap = null;
 
-  onDevice(R, lang).then((ok) => {
-    if (stopped) return finish({ text: '' });
-    local = ok;
+  const result = () => ({ text: (heard + interim).trim(), local, lang, alternatives });
+  const finish = (res) => {
+    if (finished) return;
+    finished = true; clearTimeout(silence); clearTimeout(cap);
+    onDone(res);
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true; clearTimeout(silence);
+    if (!rec) return finish(result());
+    try { rec.stop(); } catch { finish(result()); }   // onend finishes, with the last words
+  };
+  const wait = (ms) => { clearTimeout(silence); silence = setTimeout(stop, ms); };
+
+  const begin = () => {
     rec = new R();
     rec.lang = lang;
+    rec.continuous = true;
     rec.interimResults = true;
-    rec.continuous = false;
     rec.maxAlternatives = 3;   // the other guesses go to the voice log
-    if (ok) rec.processLocally = true;
+    if (local) rec.processLocally = true;
     rec.onresult = (e) => {
-      let interim = '';
+      interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           heard += e.results[i][0].transcript + ' ';
           for (let a = 1; a < e.results[i].length; a++) alternatives.push(e.results[i][a].transcript);
-        }
-        else interim += e.results[i][0].transcript;
+        } else interim += e.results[i][0].transcript;
       }
-      onText?.((heard + interim).trim(), !interim);
+
+      onText?.((heard + interim).trim());
+      wait(silenceMs);
     };
-    rec.onerror = (e) => { error = e.error; };
-    rec.onend = () => finish(error && error !== 'aborted' ? { error } : { text: heard.trim(), local, lang, alternatives });
-    try { rec.start(); } catch (err) { finish({ error: 'start' }); }
+    // "no-speech" is just a pause; this listener decides when the pause is over
+    rec.onerror = (e) => { if (e.error !== 'no-speech' && e.error !== 'aborted') error = e.error; };
+    rec.onend = () => {
+      if (error) return finish({ error });
+      if (stopped || finished) return finish(result());
+      if (interim) { heard += interim + ' '; interim = ''; }
+      try { begin(); } catch { finish(result()); }   // Chrome ended on its own: carry on
+    };
+    try { rec.start(); } catch { finish({ error: 'start' }); }
+  };
+
+  onDevice(R, lang).then((ok) => {
+    local = ok;
+    if (stopped) return finish(result());
+    begin();
+    wait(Math.max(firstWordMs, silenceMs));
+    cap = setTimeout(stop, maxMs);
   });
-  return () => { stopped = true; try { rec?.stop(); } catch {} };
+  return stop;
 }
