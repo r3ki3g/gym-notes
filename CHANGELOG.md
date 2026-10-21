@@ -11,6 +11,49 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.38.1] — 10/21/26
+
+### Fixed: doubled words and a second recogniser on Android
+- **"20 20 kgs" when "20 kgs" was said.** Android Chrome repeats earlier text
+  in each new result, and the app appended every final result. The sentence
+  is now rebuilt from Chrome's whole list each time, and a result that repeats
+  the previous one replaces it. Chrome's backup guesses are joined the same
+  way.
+- **Two recognisers could run at once.** A stopped session could still
+  deliver a late result, or even trigger its own restart, alongside the new
+  one. Only the current session is listened to now; anything from an older
+  one is ignored.
+- The voice log records how many sessions each listen took (`sessions`). On
+  Android, every pause where Chrome stops by itself is one restart, and one
+  more start chime.
+
+Verified with an Android-like stand-in, where results repeat earlier text,
+the session ends itself, and the old session sends a late result and a second
+end after the restart:
+- it read "20 kgs", then "20 kgs for 10 reps"
+- at most 1 recogniser was live at any moment
+- the log showed 2 sessions
+
+The desktop-style flow is unchanged.
+
+---
+
+## [1.38.0] — 10/21/26
+
+### Changed
+- **Drops no longer need "then".** Once a set has its weight and its reps,
+  the next number with a unit ("13 kgs", "pin 5") starts the next drop. The
+  Understood line shows the inserted "then" in green.
+  - "20 kgs for 20 raps 13 kgs for 20th 15 LBS for 20th" (a real transcript)
+    → 20 kg × 20, drops 13 kg × 20 and 15 lb × 20, nothing unparsed.
+  - Nothing splits before the reps are said, or on "15 kg each side 12
+    reps", or on half reps.
+  - "pin 5" binds the pin to the number after it, so "for 14 pin 5" is 14
+    reps, then pin 5.
+- 94 parser tests.
+
+---
+
 ## [1.37.0] — 10/21/26
 
 ### Changed: voice understands what Chrome mishears

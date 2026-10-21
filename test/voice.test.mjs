@@ -136,5 +136,19 @@ eq('"5 kg is 420 g"', U('5 kg is 420 g'), '5 [kg] [for] [20] [reps]');
 eq('"for to enter apps"', U('5 kg is for to enter apps'), '5 [kg] for [20] [reps]');
 eq('grapes only after a number', U('50 kg grapes'), '50 kg grapes');
 
+console.log('\nsets that run together without "then"\n');
+eq('the real one: "20 kgs for 20 raps 13 kgs for 20th 15 LBS for 20th"',
+   sets('20 kgs for 20 raps 13 kgs for 20th 15 LBS for 20th'), ['20kgx20', '13kgx20', '15lbx20']);
+eq('… with nothing left over', P('20 kgs for 20 raps 13 kgs for 20th 15 LBS for 20th').unparsed, []);
+eq('pins', sets('pin 7 for 14 pin 5 for 10'), ['7blockx14', '5blockx10']);
+eq('plain', sets('60 kg 10 reps 40 kg 8 reps'), ['60kgx10', '40kgx8']);
+eq('"then" and run-together mixed', sets('20 kg 10 reps then 15 kg 8 reps 10 kg 6 reps'), ['20kgx10', '15kgx8', '10kgx6']);
+eq('a run-together drop with no reps gets none', sets('50 kg 10 reps 30 kg'), ['50kgx10', '30kgx?']);
+eq('"4" as "for" in the second set too', sets('20 kg 10 reps 5 kg is 4 2 rapes'), ['20kgx10', '5kgx2']);
+eq('no split: "15 kg each side 12 reps"', sets('15 kg each side 12 reps'), ['15kgx12']);
+eq('no split: half reps after the reps', P('20 kg 12 reps plus 2 halves').set, { weight: 20, unit: 'kg', reps: 12, halfReps: 2 });
+eq('no split before the reps are said', sets('20 kg for 12'), ['20kgx12']);
+eq('Understood shows the "then" it inserted', U('20 kgs for 20 raps 13 kgs for 20th'), '20 [kg] for 20 [reps] [then] 13 [kg] for [20]');
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -49,22 +49,27 @@ export function speechError(code) {
  * own after a pause; those are restarted, keeping what was heard.
  *
  * @param onText  (text so far) on every update: final words plus the guess in progress
- * @param onDone  ({ text, local, lang, alternatives } | { error })
+ * @param onDone  ({ text, local, lang, alternatives, sessions } | { error })
  * @returns stop()
  */
 export function listen({ silenceMs = 3000, firstWordMs = 6000, maxMs = 60000, onText, onDone }) {
   const R = Recognition();
   if (!R) { onDone({ error: 'unsupported' }); return () => {}; }
   const lang = speechLang();
-  let rec = null, stopped = false, finished = false, error = null, local = false;
-  let heard = '', interim = '';
-  const alternatives = [];
+  let rec = null, stopped = false, finished = false, error = null, local = false, sessions = 0;
+  // text from sessions Chrome already ended, and the current session's own
+  let committed = '', sessionFinal = '', sessionInterim = '';
+  let alternatives = [];
   let silence = null, cap = null;
 
-  const result = () => ({ text: (heard + interim).trim(), local, lang, alternatives });
+  const join = (...parts) => parts.map((x) => x.trim()).filter(Boolean).join(' ');
+  const text = () => join(committed, sessionFinal, sessionInterim);
+  const result = () => ({ text: text(), local, lang, alternatives, sessions });
   const finish = (res) => {
     if (finished) return;
     finished = true; clearTimeout(silence); clearTimeout(cap);
+    const r = rec; rec = null;
+    try { r?.abort(); } catch {}
     onDone(res);
   };
   const stop = () => {
@@ -75,34 +80,66 @@ export function listen({ silenceMs = 3000, firstWordMs = 6000, maxMs = 60000, on
   };
   const wait = (ms) => { clearTimeout(silence); silence = setTimeout(stop, ms); };
 
-  const begin = () => {
-    rec = new R();
-    rec.lang = lang;
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 3;   // the other guesses go to the voice log
-    if (local) rec.processLocally = true;
-    rec.onresult = (e) => {
-      interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          heard += e.results[i][0].transcript + ' ';
-          for (let a = 1; a < e.results[i].length; a++) alternatives.push(e.results[i][a].transcript);
-        } else interim += e.results[i][0].transcript;
-      }
+  /**
+   * One session's words, rebuilt from Chrome's whole list each time rather than
+   * appended: on Android a later result repeats the earlier ones ("20", then
+   * "20 kgs"), and appending made "20 20 kgs".
+   */
+  const collapse = (list) => {
+    let out = '';
+    for (const t of list.map((x) => x.trim()).filter(Boolean)) {
+      if (!out || t.toLowerCase().startsWith(out.toLowerCase())) out = t;   // repeats what came before: replace
+      else if (!out.toLowerCase().endsWith(t.toLowerCase())) out = `${out} ${t}`;
+    }
+    return out;
+  };
 
-      onText?.((heard + interim).trim());
+  const begin = () => {
+    // only ever one recogniser: a stopped one's late results or restart are
+    // ignored (that was the second "process", and the second chime)
+    const me = new R();
+    rec = me; sessions++;
+    sessionFinal = ''; sessionInterim = '';
+    me.lang = lang;
+    me.continuous = true;
+    me.interimResults = true;
+    me.maxAlternatives = 3;   // the other guesses go to the voice log
+    if (local) me.processLocally = true;
+    me.onresult = (e) => {
+      if (rec !== me) return;
+      const finals = [], interims = [];
+      let alts = [];
+      for (let i = 0; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) {
+          finals.push(res[0].transcript);
+          // the other guesses for this phrase, as whole sentences with what came before
+          alts = [];
+          for (let a = 1; a < res.length; a++) alts.push(res[a].transcript);
+          alts = alts.map((alt) => collapse([...finals.slice(0, -1), alt]));
+        } else interims.push(res[0].transcript);
+      }
+      sessionFinal = collapse(finals);
+      let interim = collapse(interims);
+      // an interim that repeats the finished words: keep only what is new
+      if (sessionFinal && interim.toLowerCase().startsWith(sessionFinal.toLowerCase())) interim = interim.slice(sessionFinal.length);
+      sessionInterim = interim;
+      if (alts.length) alternatives = alts.map((a) => join(committed, a));   // committed + this session's guess
+      onText?.(text());
       wait(silenceMs);
     };
     // "no-speech" is just a pause; this listener decides when the pause is over
-    rec.onerror = (e) => { if (e.error !== 'no-speech' && e.error !== 'aborted') error = e.error; };
-    rec.onend = () => {
+    me.onerror = (e) => { if (rec === me && e.error !== 'no-speech' && e.error !== 'aborted') error = e.error; };
+    me.onend = () => {
+      if (rec !== me) return;   // an old session ending late: not ours any more
       if (error) return finish({ error });
+      committed = text(); sessionFinal = ''; sessionInterim = '';
       if (stopped || finished) return finish(result());
-      if (interim) { heard += interim + ' '; interim = ''; }
-      try { begin(); } catch { finish(result()); }   // Chrome ended on its own: carry on
+      // Chrome ended on its own (Android does after each phrase): carry on.
+      // On Android each restart plays the start chime; it cannot be silenced.
+      try { begin(); } catch { finish(result()); }
     };
-    try { rec.start(); } catch { finish({ error: 'start' }); }
+    try { me.start(); } catch { finish({ error: 'start' }); }
   };
 
   onDevice(R, lang).then((ok) => {

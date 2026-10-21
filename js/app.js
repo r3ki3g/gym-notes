@@ -1888,7 +1888,7 @@ function viewLogSet(v, exerciseId, profileId, existing = null) {
           },
           onDone: (res) => {
             stop = null; mic.classList.remove('listening'); label.textContent = 'Say the set';
-            const how = { alternatives: res.alternatives || [], local: !!res.local, lang: res.lang || null };
+            const how = { alternatives: res.alternatives || [], local: !!res.local, lang: res.lang || null, sessions: res.sessions || 1 };
             if (res.text) session.last = res.text;
             if (cleared) return writeLog('cleared', how);
             if (res.error) {

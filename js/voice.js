@@ -158,17 +158,21 @@ export function repair(ws, heard = ws.map(String)) {
     const w = ws[i], next = ws[i + 1], prev = toks[toks.length - 1], h = heard[i];
     const repsExpected = weight && !reps;
     if (num(w)) {
+      // a new weight after a complete set: the next set, possibly without "then"
+      if (UNIT[next] && weight && reps) reps = false;
       if (ORDINAL.has(next)) { put(w, `${h}${next}`); i++; if (weight) reps = true; continue; }
       if (repsExpected && w === 4 && num(next)) { put('for', h, 'for'); continue; }
       if (repsExpected && w >= 410 && w <= 460 && Number.isInteger(w) && (next === undefined || next === 'g' || REPS.has(next) || REP_ALIASES.has(next))) {
         put('for', h, 'for'); toks.push(w - 400); items.push({ text: String(w - 400), changed: true, heard: '' }); reps = true; continue;
       }
       put(w, h);
-      if (UNIT[prev]) weight = true;
+      const pinAhead = next === 'pin' && num(ws[i + 2]);   // "14 pin 5": 14 is not "14 pins"
+      if ((UNIT[next] && !pinAhead) || UNIT[prev]) weight = true;   // "5 kg", "pin 5": a weight, not reps
       else if (weight) reps = true;
       continue;
     }
     if (UNIT[w]) {
+      if (num(next) && weight && reps) reps = false;   // "… for 14 pin 5 for 10"
       if (next === 'is') { put(w, `${h} is`, w); i++; } else put(w, h);
       if (num(prev)) weight = true;
       continue;
@@ -180,10 +184,46 @@ export function repair(ws, heard = ws.map(String)) {
   return { toks, items };
 }
 
-/** One part: the set, or one drop. */
-function readPart(text, { timed, bodyweight }) {
+/**
+ * Where a set runs into the next without "then": once a set has its weight and
+ * its reps, the next number with a unit ("13 kgs", "pin 5") starts a new one.
+ *   "20 kgs for 20 reps 13 kgs for 20 15 lbs for 20" -> cuts before 13 and 15
+ * @returns indexes in toks where a new set starts
+ */
+export function implicitCuts(toks) {
+  const cuts = [];
+  let weight = false, reps = false;
+  const num = (x) => typeof x === 'number';
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i], next = toks[i + 1], prev = toks[i - 1];
+    // "pin 5" binds the pin to the number after it: "14 pin 5" is 14, then pin 5
+    const numUnit = num(t) && UNIT[next] && !(next === 'pin' && num(toks[i + 2]));
+    // a unit right after its own number was skipped above, so a unit met here
+    // with a number after it is "pin 5"
+    const unitNum = UNIT[t] && num(next);
+    if (numUnit || unitNum) {
+      if (weight && reps) { cuts.push(i); reps = false; }
+      weight = true; i++;   // past the unit, or the number after "pin"
+      continue;
+    }
+    if (num(t) && weight && !HALVES.has(next)) reps = true;
+  }
+  return cuts;
+}
+
+/** An explicit part split further wherever a new set starts without "then". */
+function splitSets(text) {
+  const toks = repair(numberize(words(text))).toks;
+  const out = [];
+  let a = 0;
+  for (const c of implicitCuts(toks)) { out.push(toks.slice(a, c)); a = c; }
+  out.push(toks.slice(a));
+  return out;
+}
+
+/** One part: the set, or one drop (repaired tokens). */
+function readPart(ws, { timed, bodyweight }) {
   const r = { unparsed: [] };
-  const ws = repair(numberize(words(text))).toks;
   const isNum = (x) => typeof x === 'number';
   let repsEnd = -2;   // where the reps phrase ended, for "12 reps each side"
 
@@ -257,7 +297,8 @@ export function parseUtterance(text, { timed = false, bodyweight = false, unit =
   if (WARM.test(low)) { out.set.warmup = true; low = low.replace(new RegExp(WARM.source, 'g'), ' '); }
 
   // 3. the set, then its drops: "then", "drop set", "drop to", "dropped (to)"
-  const parts = low.split(SEPARATOR);
+  // explicit "then" / "drop to", and sets run together without them
+  const parts = low.split(SEPARATOR).flatMap((p) => splitSets(p));
   const main = readPart(parts[0], { timed, bodyweight });
   for (const k of ['weight', 'unit', 'reps', 'halfReps', 'seconds', 'perSide', 'unilateral']) if (main[k] != null) out.set[k] = main[k];
   out.unparsed.push(...main.unparsed);
@@ -265,7 +306,7 @@ export function parseUtterance(text, { timed = false, bodyweight = false, unit =
 
   const setUnit = out.set.unit || unit;
   for (const p of parts.slice(1)) {
-    if (!p.trim()) continue;
+    if (!p.length) continue;
     const d = readPart(p, { timed: false, bodyweight });
     out.unparsed.push(...d.unparsed);
     if (d.weight == null && d.reps == null) continue;
@@ -357,7 +398,9 @@ export function understand(text) {
       if (n) { nums.push(n.value); heardNums.push(ws.slice(i, n.next).join(' ')); i = n.next; }
       else { nums.push(ws[i]); heardNums.push(ws[i]); i++; }
     }
-    const { items } = repair(nums, heardNums);
+    const { toks, items } = repair(nums, heardNums);
+    // where a new set started without "then", show the "then" it was read as
+    for (const c of implicitCuts(toks).reverse()) items.splice(c, 0, { text: 'then', changed: true, heard: '' });
     for (const it of items) {
       // "warm up(s)", "warming up" as one term
       const c = CANON[it.text];
