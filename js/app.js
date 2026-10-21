@@ -3,6 +3,7 @@ import { ready, initFirebase, getStoredKey, saveKey, clearKey, isKeyError,
 import * as S from './store.js';
 import { SEED_EXERCISES, SEED_PROFILES } from './seed.js';
 import { searchExercises, recentFrequency, MUSCLES } from './search.js';
+import { POLL_MS, STALE_HIDDEN_MS, POLL_TIMEOUT_MS, RECONNECT_GAP_MS, newestCreated, reconcile, mergeSets, fromOtherPhone, alertText, syncState, backoff } from './sync.js';
 import { parseStore, recordPick, learnedPick, phraseCount, listPicks, forgetPhrase } from './learn.js';
 import { layoutSides, resolveTarget, lastSessionFor } from './sides.js';
 import { CHART_METRICS, buildProgress } from './progress.js';
@@ -151,15 +152,26 @@ function paintTopbar() {
   }
 }
 
-function paintSync(online) {
+/**
+ * The top-bar dot. Green only when the server has answered in the last 30s —
+ * it used to go by "the phone has internet", which stayed green over a
+ * listener that had silently died.
+ */
+const SYNC_LABEL = {
+  live: ['on', 'Synced', 'Synced: new sets arrive live'],
+  wait: ['wait', 'Connecting…', 'Online, waiting for the server: sets save on this phone meanwhile'],
+  off:  ['off', 'Offline', 'Offline: sets save on this phone and sync when it is back'],
+};
+function paintSync() {
+  const st = syncState({ online: navigator.onLine, lastServerAt: sync.lastServerAt, now: Date.now() });
+  const [cls, label, title] = SYNC_LABEL[st];
   const s = document.getElementById('sync');
-  s.className = 'sync ' + (online ? 'on' : 'off');
-  const label = online ? 'Synced' : 'Offline';
+  if (!s || s.dataset.state === st) return;
+  s.dataset.state = st;
+  s.className = 'sync ' + cls;
   s.querySelector('.sync-label').textContent = label;
-  s.title = label;   // the text is hidden on narrow screens; the dot needs a name
+  s.title = title;   // the text is hidden on narrow screens; the dot needs a name
 }
-window.addEventListener('online',  () => paintSync(true));
-window.addEventListener('offline', () => paintSync(false));
 
 /* ============================ boot splash ============================ */
 
@@ -253,38 +265,130 @@ function markAlertsSeen() {
  * Firestore socket, so there is no polling and no extra read cost beyond the
  * documents themselves.
  */
-function startRecentWatch() {
+/*
+ * Live updates (docs/sync-reliability-spec.md). The listener does the work
+ * while its connection is alive. Underneath it:
+ *   - a poll every 10s while the app is visible: "any sets newer than the
+ *     newest I hold?", one read when the answer is no
+ *   - on coming back (screen on, app switched back, back online): poll at once,
+ *     and after a long sleep open a fresh connection, since the old one has
+ *     usually died without saying so. The poll rides the same connection, so
+ *     a poll with no answer in 8s also forces a fresh one.
+ *   - a failed listener is restarted with backoff; Firestore never does that
+ *   - alerts that arrive while the app is hidden wait for its return
+ */
+const sync = {
+  known: new Set(),   // set ids already seen; a new one is news
+  primed: false,      // the server has confirmed a full view once
+  lastServerAt: 0,    // the server last answered (listener or poll)
+  extras: [],         // polled sets the listener has not delivered yet
+  listened: [],       // the listener's own latest view
+  away: [],           // other people's sets that came in while hidden
+  failures: 0, retry: null, polling: false, hiddenAt: 0, reconnectedAt: 0,
+};
+
+/**
+ * A fresh server connection; listeners resume where they were. Rate-limited.
+ * Resolves once the new connection is up, so a poll can follow it — a poll
+ * started during the swap just fails.
+ */
+function reconnectNow() {
+  if (!state.owner || Date.now() - sync.reconnectedAt < RECONNECT_GAP_MS) return Promise.resolve();
+  sync.reconnectedAt = Date.now();
+  return S.reconnect().catch(() => {});
+}
+
+function startRecentWatch(force = false) {
   const since = S.daysAgoKey(HISTORY_DAYS);
-  if (recentSince === since) return;
+  if (!force && recentSince === since) return;
   recentSince = since;
   unsubRecent();
+  clearTimeout(sync.retry);
 
-  unsubRecent = S.watchRecent(since, ({ all, added }) => {
-    state.recent = all;
-
-    // Your own sets are not news, and pre-identity sets can't be attributed.
-    const today = S.todayKey();
-    const theirs = added.filter((x) =>
-      x.date === today && x.enteredBy && x.enteredBy !== state.owner);
-    if (!theirs.length) return renderFromData();
-
-    if (notifOn()) {
-      const who = [...new Set(theirs.map((x) => x.enteredBy))];
-      let msg;
-      if (theirs.length === 1) {
-        const ex = exerciseById(theirs[0].exerciseId);
-        msg = `${who[0]} logged ${ex ? ex.name : 'a set'}`;
-      } else if (who.length === 1) {
-        msg = `${who[0]} logged ${theirs.length} sets`;
-      } else {
-        msg = `${theirs.length} new sets logged`;
-      }
-      toast(msg, 'dumbbell');
-      chime();        // self-limiting: at most one tone per 15s
-    }
-    renderFromData();
+  unsubRecent = S.watchRecent(since, ({ all, fromCache, changed }) => {
+    if (!fromCache) { sync.lastServerAt = Date.now(); sync.failures = 0; paintSync(); }
+    // metadata only (a write landing, the server confirming): nothing to show,
+    // except the first server confirmation, which primes "news"
+    if (!changed && (fromCache || sync.primed)) return;
+    sync.listened = all;
+    ({ recent: state.recent, extras: sync.extras } = reconcile(all, sync.extras));
+    ingest(all, { confirmed: !fromCache });
+  }, () => {
+    // dead: try again shortly, then less often
+    recentSince = null;
+    clearTimeout(sync.retry);
+    sync.retry = setTimeout(() => startRecentWatch(true), backoff(sync.failures++));
   });
 }
+
+/**
+ * Notes which sets are new, and announces other people's. Nothing counts as
+ * news until the server has confirmed a full view: the first snapshot comes
+ * from this phone's cache, and everything the server adds to it was logged
+ * while the app was closed (on a fresh phone, that was every set today).
+ */
+function ingest(sets, { confirmed }) {
+  const fresh = [];
+  for (const x of sets) {
+    if (sync.known.has(x.id)) continue;
+    sync.known.add(x.id);
+    if (sync.primed) fresh.push(x);
+  }
+  if (confirmed) sync.primed = true;
+  announce(fresh);
+  renderFromData();
+}
+
+async function pollNow() {
+  if (!sync.primed || sync.polling || document.hidden) return;
+  const cursor = newestCreated(state.recent);
+  if (cursor == null) return;
+  sync.polling = true;
+  let timer;
+  try {
+    const got = await Promise.race([
+      S.setsCreatedAfter(cursor),
+      new Promise((_, no) => { timer = setTimeout(() => no(new Error('stuck')), POLL_TIMEOUT_MS); }),
+    ]);
+    sync.lastServerAt = Date.now();
+    if (got.length) {
+      sync.extras = mergeSets(sync.extras, got);
+      ({ recent: state.recent, extras: sync.extras } = reconcile(sync.listened, sync.extras));
+      ingest(got, { confirmed: true });
+    }
+  } catch (e) {
+    // No answer while the phone says it is online: the connection is stuck.
+    // Offline is different, and the dot already says so.
+    if (e?.message === 'stuck' && navigator.onLine) reconnectNow();
+  } finally { clearTimeout(timer); sync.polling = false; paintSync(); }
+}
+
+function announce(fresh) {
+  const theirs = fromOtherPhone(fresh, { deviceId: currentDeviceId(), owner: state.owner, today: S.todayKey() });
+  if (!theirs.length) return;
+  // A toast on a screen nobody is looking at is a lost alert, and phones block
+  // vibration while hidden: hold them for the return.
+  if (document.hidden) { sync.away.push(...theirs); return; }
+  notifyTheirs(theirs, false);
+}
+
+function notifyTheirs(sets, away) {
+  if (!notifOn()) return;
+  toast(alertText(sets, { away, now: Date.now(), exerciseName: (id) => exerciseById(id)?.name }), 'dumbbell');
+  chime();        // self-limiting: at most one tone per 15s
+}
+
+setInterval(() => { pollNow(); paintSync(); }, POLL_MS);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { sync.hiddenAt = Date.now(); return; }
+  if (sync.away.length) notifyTheirs(sync.away.splice(0), true);
+  const slept = sync.hiddenAt && Date.now() - sync.hiddenAt > STALE_HIDDEN_MS;
+  (slept ? reconnectNow() : Promise.resolve()).then(pollNow);
+  paintSync();
+});
+window.addEventListener('online', () => { reconnectNow().then(pollNow); paintSync(); });
+window.addEventListener('offline', () => paintSync());
 
 /* ============================ usage tracking ============================ */
 
@@ -2141,7 +2245,7 @@ function showUnlock(message) {
 
 async function boot() {
   paintSplashVersion();
-  paintSync(navigator.onLine);
+  paintSync();
 
   const key = getStoredKey();
   if (!key) return showUnlock();

@@ -92,7 +92,7 @@ h3{font-size:.95rem;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;
 .sync-label{display:none}
 @media (min-width:430px){ .sync-label{display:inline} }
 .sync .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
-.sync.on .dot{background:var(--good)} .sync.off .dot{background:var(--warn)}
+.sync.on .dot{background:var(--good)} .sync.wait .dot{background:var(--warn)} .sync.off .dot{background:var(--faint)}
 
 #view{padding:14px 14px 20px;max-width:620px;margin:0 auto}
 

@@ -11,6 +11,60 @@ git tag v1.0.1 && git push --tags
 
 ---
 
+## [1.27.0] — 10/21/26
+
+### Fixed: live updates and alerts were unreliable
+Diagnosis and plan in `docs/sync-reliability-spec.md`. The live listener
+stays, with a safety net under it:
+- **Poll every 10s while the app is on screen:** "any sets newer than the
+  newest I have?" An empty answer costs 1 read, about 650 reads on a gym day for
+  both phones, 1.3% of the free tier. It never runs while hidden.
+- **Coming back after the phone slept 2+ minutes opens a fresh connection,**
+  then polls. The old connection usually died without saying so. Coming back
+  online does the same. A poll with no answer in 8s does too, because the poll
+  rides the same connection.
+- **A listener that fails is restarted** after 2s, 4s, 8s and so on, up to a
+  minute. Before, one error stopped live updates until a reload.
+- **Alerts that arrive while the app is hidden wait for your return:** "While
+  you were away: Chamuth logged 3 sets". Before, the toast showed for 3s on a
+  screen nobody was looking at.
+- **The sync dot tells the truth:**
+  - green "Synced" only if the server answered in the last 30s
+  - amber "Connecting…" while online but waiting for the server
+  - grey "Offline"
+
+  It used to show green whenever the phone had internet, even with a dead
+  listener.
+- **Whose set is news is decided by phone (`deviceId`)**, not by name, falling
+  back to the name only for sets from old versions.
+- **No more false "X logged N sets" toast when opening the app**, for sets that
+  were logged while it was closed. News starts once the server has confirmed
+  the first view.
+- A listener stopped before sign-in finished could still start, leaving a
+  second one running. Fixed.
+
+Verified against the live server, read-only:
+- the dot goes from waiting to live in about 5s
+- 3 polls in 31s on screen, none in 21s hidden
+- a return after a 3-minute sleep reconnects and polls at once, while a short
+  one keeps the connection
+- going offline and back online reconnects
+
+End-to-end, with two headless phones and 4 throwaway sets on the Test
+profile, all deleted afterwards (0 left on the server):
+- A on screen: the alert "Test logged Incline dumbbell press" arrived as soon
+  as B's save was confirmed.
+- A hidden: no alert while hidden, then "While you were away: …" the moment A
+  came back.
+- The poll's "sets newer than…" query returns the new set from the server.
+- The user's own browser, open as Prabhashwara, alerted on the same test sets.
+- Not proven: recovery from a stalled-but-online connection. Throttling
+  headless Chrome didn't stall the open stream, so the 8s timeout path never
+  triggered. That code path is small, and it only runs when a poll goes
+  unanswered.
+
+---
+
 ## [1.26.1] — 10/21/26
 
 ### Changed

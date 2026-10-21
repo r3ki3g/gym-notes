@@ -5,7 +5,8 @@
 import { db, ready } from './firebase.js';
 import {
   collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, serverTimestamp, writeBatch, getDocs
+  onSnapshot, query, where, orderBy, limit, serverTimestamp, writeBatch, getDocs,
+  getDocsFromServer, Timestamp, disableNetwork, enableNetwork
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 
 export const COL = {
@@ -119,29 +120,55 @@ export function daysAgoKey(n, from = new Date()) {
  * which sorts lexicographically, so no composite index is needed. Bounded on
  * purpose: unbounded growth was already the one scaling worry in the README.
  *
- * Reports `added` as genuinely-new document ids. Tracking ids rather than
- * trusting docChanges() matters because the offline cache delivers a snapshot
- * from disk and again from the server, both marking the same docs "added".
+ * Deciding what is news (a set not seen before) is the caller's job, since
+ * the poll below feeds the same decision.
+ *
+ * `fromCache` says whether this view is only the disk cache or confirmed by
+ * the server; metadata-only snapshots (a pending write landing, the server
+ * catching up) are delivered too, with `changed: 0`, so the caller can tell
+ * the connection is alive. `onError` fires when the listener dies — Firestore
+ * never restarts a failed listener itself.
  */
-export function watchRecent(since, onChange) {
+export function watchRecent(since, onSnap, onError) {
   let stop = () => {};
-  const seen = new Set();
-  let primed = false;
-
+  let stopped = false;
   ready().then(() => {
+    // stopped before sign-in finished: never start (it used to start anyway,
+    // leaving a second listener running)
+    if (stopped) return;
     stop = onSnapshot(
       query(collection(db, COL.sets), where('date', '>=', since)),
-      (snap) => {
-        const all = rows(snap);
-        const fresh = snap.docs.filter((d) => !seen.has(d.id)).map((d) => ({ id: d.id, ...d.data() }));
-        snap.docs.forEach((d) => seen.add(d.id));
-        onChange({ all, added: primed ? fresh : [] });
-        primed = true;
-      },
-      (err) => console.error('[recent] subscription failed', err)
+      { includeMetadataChanges: true },
+      (snap) => onSnap({ all: rows(snap), fromCache: snap.metadata.fromCache, changed: snap.docChanges().length }),
+      (err) => { console.error('[recent] subscription failed', err); onError?.(err); }
     );
-  });
-  return () => stop();
+  }).catch((err) => onError?.(err));
+  return () => { stopped = true; stop(); };
+}
+
+/**
+ * The safety net under watchRecent: sets the server stored after `afterMs`
+ * (server time, so phone clocks do not matter). Always from the server, never
+ * the cache: the point is to catch what a stalled listener missed. An empty
+ * answer costs one read.
+ */
+export async function setsCreatedAfter(afterMs, max = 100) {
+  await ready();
+  const snap = await getDocsFromServer(query(collection(db, COL.sets),
+    where('createdAt', '>', Timestamp.fromMillis(afterMs)), orderBy('createdAt'), limit(max)));
+  return rows(snap);
+}
+
+/**
+ * Drops the connection to the server and opens a fresh one. Every listener
+ * resumes from where it was, so only changed documents are re-read (within 30
+ * minutes). For when the old connection may be dead without saying so: after
+ * the phone slept, or when a poll got no answer.
+ */
+export async function reconnect() {
+  await ready();
+  await disableNetwork(db);
+  await enableNetwork(db);
 }
 
 /* ---------- usage ---------- */
